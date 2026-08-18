@@ -81,7 +81,7 @@ const sanitizeComponentData = (data) => {
 export const generateSingleComponentInsight = async ({ componentData, customPrompt }) => {
   const sanitizedData = sanitizeComponentData(componentData);
   const title = componentData.TITLE || componentData.CHART_OUTPUT_LIST?.[0]?.TITLE || "Component Table Data";
-  console.log("title:", title);
+  console.log("title 1:", title);
   const componentTypeId = componentData.COMPONENT_TYPE_ID || componentData.COMPONENT_ID || null;
   console.log("componentTypeId:", componentTypeId);
 
