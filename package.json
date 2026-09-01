@@ -13,10 +13,12 @@
     "build": "echo 'No build step required'"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
     "@google/genai": "^2.15.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "nodemon": "^3.1.14",
+    "openai": "^7.5.0",
     "winston": "^3.19.0"
   }
 }

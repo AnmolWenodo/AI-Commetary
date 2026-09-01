@@ -1,17 +1,41 @@
-# 🤖 AI Commentary — Gemini-Powered Business Intelligence API
+# 🤖 AI Commentary — Multi-Provider Business Intelligence API (Gemini, OpenAI, Claude)
 
-A lightweight Node.js/Express REST API that leverages **Google Gemini AI** to generate rich, data-driven executive commentary and component-level insights from hospitality, hotel, restaurant, and sales analytics data.
+A lightweight, high-performance Node.js/Express REST API that generates rich, data-driven executive commentary and component-level insights from hospitality, hotel, restaurant, and sales analytics data using **Google Gemini**, **OpenAI**, or **Anthropic Claude**.
 
 ---
 
 ## ✨ Features
 
-- 🧠 **Executive AI Commentary** — Multi-paragraph (400–600 word) analytical overviews synthesizing all data components
+- 🧠 **Multi-Provider AI Support** — Switch dynamically between **Gemini (1)**, **OpenAI (2)**, and **Claude (3)** using flags in headers, queries, or body
+- 📈 **Executive AI Commentary** — Multi-paragraph (400–600 word) analytical overviews synthesizing all data components
 - 📊 **Component Insight Engine** — Per-component AI analysis with status, key findings, metrics summary, and recommendations
-- ⚡ **Parallel Batch Processing** — Automatically splits large payloads (>20 components) into parallel Gemini API calls and merges results
-- 🧹 **Smart Data Sanitization** — Strips null, zero, and empty values before sending to Gemini to drastically reduce token usage
+- ⚡ **Parallel Batch Processing** — Automatically splits large payloads (>20 components) into parallel AI calls and merges results
+- 🧹 **Smart Data Sanitization** — Strips null, zero, and empty values before sending to LLMs to drastically reduce token usage
 - 📝 **Structured Winston Logging** — File-based (`app.log`, `error.log`) and console logging with environment-aware levels
-- 📦 **Token Usage Tracking** — Every response includes prompt, candidate, and total token counts
+- 📦 **Token Usage & Provider Tracking** — Every response includes prompt, candidate/completion, and total token counts along with active provider and model
+
+---
+
+## 🚦 AI Provider Selection Flags
+
+You can specify which AI model to use on every request using a **flag** or **provider name**:
+
+| Flag Number | Provider Name | Default Model | Environment Variable |
+|---|---|---|---|
+| `1` | `gemini` / `google` | `gemini-2.0-flash` | `GEMINI_API_KEY`, `GEMINI_MODEL` |
+| `2` | `openai` / `chatgpt` | `gpt-4o` | `OPENAI_API_KEY`, `OPENAI_MODEL` |
+| `3` | `claude` / `anthropic` | `claude-3-5-sonnet-20241022` | `ANTHROPIC_API_KEY`, `CLAUDE_MODEL` |
+
+### How to Pass the Flag:
+
+1. **Via Query Parameter**:
+   `POST /api/ai/chat?flag=2` or `POST /api/ai/chat?provider=openai`
+2. **Via Request Header**:
+   `x-ai-provider: 2` or `provider: openai` or `flag: 1`
+3. **Via Request Body**:
+   `{ "flag": 2, "data": [ ... ] }` or `{ "provider": "claude", "prompt": "..." }`
+4. **Via `.env` Default**:
+   `DEFAULT_AI_PROVIDER=openai` (or `DEFAULT_AI_PROVIDER=2`)
 
 ---
 
@@ -22,18 +46,23 @@ AI-Commentary/
 ├── app.js                  # Express app setup & middleware
 ├── server.js               # Server entry point (port binding)
 ├── config/
+│   ├── aiProviders.js      # Provider resolution (1: Gemini, 2: OpenAI, 3: Claude)
 │   ├── gemini.js           # Google Gemini AI client initialization
+│   ├── openai.js           # OpenAI client initialization
+│   ├── claude.js           # Anthropic Claude client initialization
 │   └── logger.js           # Winston logger configuration
 ├── controllers/
-│   └── aiController.js     # Route handler logic (chat & component insight)
+│   └── aiController.js     # Route handlers with provider flag extraction
 ├── routes/
 │   └── aiRoutes.js         # API route definitions
 ├── services/
-│   └── geminiServices.js   # Core AI logic: sanitization, prompting, batching
+│   ├── aiService.js        # Core multi-provider AI logic: sanitization, prompting, batching
+│   └── geminiServices.js   # Re-exports aiService for backward compatibility
 ├── logs/                   # Runtime log files (git-ignored)
 │   ├── app.log
 │   └── error.log
 ├── .env                    # Environment variables (git-ignored)
+├── .env.example
 ├── .gitignore
 └── package.json
 ```
@@ -45,7 +74,10 @@ AI-Commentary/
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) v18+
-- A [Google Gemini API Key](https://aistudio.google.com/app/apikey)
+- API Keys for one or more providers:
+  - [Google Gemini API Key](https://aistudio.google.com/app/apikey)
+  - [OpenAI API Key](https://platform.openai.com/api-keys)
+  - [Anthropic Claude API Key](https://console.anthropic.com/settings/keys)
 
 ### Installation
 
@@ -60,23 +92,28 @@ npm install
 
 ### Environment Setup
 
-Create a `.env` file in the project root:
+Create or update `.env` in the project root:
 
 ```env
 PORT=3000
-GEMINI_API_KEY=your_google_gemini_api_key_here
-GEMINI_MODEL=gemini-2.0-flash
 LOG_LEVEL=info
 NODE_ENV=development
-```
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `PORT` | No | `3000` | Server port |
-| `GEMINI_API_KEY` | ✅ Yes | — | Your Google Gemini API key |
-| `GEMINI_MODEL` | No | `gemini-2.0-flash` | Gemini model to use |
-| `LOG_LEVEL` | No | `info` | Winston log level |
-| `NODE_ENV` | No | — | Set to `production` to disable console logs |
+# Default AI Provider if not specified in request: 1 (gemini), 2 (openai), 3 (claude)
+DEFAULT_AI_PROVIDER=gemini
+
+# 1. Google Gemini Configuration
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-2.0-flash
+
+# 2. OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o
+
+# 3. Anthropic Claude Configuration
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
+CLAUDE_MODEL=claude-3-5-sonnet-20241022
+```
 
 ### Running the Server
 
@@ -102,23 +139,19 @@ http://localhost:3000/api/ai
 
 ### `POST /api/ai/chat`
 
-Generates an **Executive AI Commentary** by analyzing one or more data components.
+Generates an **Executive AI Commentary** by analyzing one or more data components. Supports large payloads (>20 components) with parallel batching.
 
-Supports large payloads — components are automatically batched in parallel chunks of 20.
+#### Request Headers / Query Params
 
-#### Request
-
-| Source | Field | Type | Description |
+| Parameter | Type | In | Description |
 |---|---|---|---|
-| Query / Header | `prompt` | `string` | Custom analysis instruction |
-| Body | — | `Array<Object>` | Array of component data objects |
-| Body | `prompt` | `string` | (Optional) Inline prompt |
-| Body | `data` | `Array<Object>` | (Optional) Component data |
+| `flag` / `provider` | `string \| number` | Query / Header / Body | `1` (Gemini), `2` (OpenAI), `3` (Claude) |
+| `prompt` | `string` | Query / Header / Body | Custom analysis instruction |
 
-#### Request Example
+#### Request Example (OpenAI Flag `2`):
 
 ```http
-POST /api/ai/chat?prompt=Focus+on+profitability+trends
+POST /api/ai/chat?flag=2&prompt=Focus+on+profitability+trends
 Content-Type: application/json
 
 [
@@ -140,10 +173,12 @@ Content-Type: application/json
 ```json
 {
   "success": true,
+  "provider": "openai",
+  "model": "gpt-4o",
   "data": {
     "title": "Executive AI Commentary",
     "ai_commentary": {
-      "overview": "Extensive multi-paragraph executive analysis...",
+      "overview": "Extensive multi-paragraph executive analysis (400-600 words)...",
       "status": "Warning",
       "status_color": "yellow",
       "key_findings": [
@@ -170,17 +205,14 @@ Content-Type: application/json
 
 Generates a **detailed per-component insight** including status, key findings, metrics summary, highlights, recommendations, and an AI commentary block.
 
-- **Single object** → generates a focused single-component insight
-- **Array with 1 item** → unwrapped and treated as a single component
-- **Array with >1 items** → routed to the batch commentary engine (same as `/chat`)
-
-#### Request Example
+#### Request Example (Claude Flag `3` in Body):
 
 ```http
 POST /api/ai/component-insight
 Content-Type: application/json
 
 {
+  "flag": 3,
   "COMPONENT_TYPE_ID": 205,
   "TITLE": "Food & Beverage Product Mix",
   "CHART_OUTPUT_LIST": [ ... ]
@@ -192,6 +224,8 @@ Content-Type: application/json
 ```json
 {
   "success": true,
+  "provider": "claude",
+  "model": "claude-3-5-sonnet-20241022",
   "data": {
     "COMPONENT_TYPE_ID": 205,
     "TITLE": "Food & Beverage Product Mix",
@@ -234,22 +268,17 @@ Content-Type: application/json
 ## 🔧 Architecture & Key Design Decisions
 
 ### Data Sanitization
-Before any data is sent to Gemini, it passes through a recursive `sanitizeComponentData()` function that removes:
+Before any data is sent to the LLM, it passes through a recursive `sanitizeComponentData()` function that removes:
 - `null`, `undefined`, `false`, `""` values
 - Zero-value metrics (`0`, `0.0`, `"0%"`, etc.) — except essential identifier keys like `COMPONENT_TYPE_ID`
 - Empty arrays and empty objects
 - Series arrays containing only zeros or nulls
 
-This significantly reduces token consumption on large dashboard payloads.
-
 ### Parallel Batching
 When a payload contains more than **20 components**, `generateResponse()` automatically:
 1. Splits the array into chunks of 20
-2. Fires all batches concurrently via `Promise.all()`
+2. Executes batches concurrently across the chosen provider
 3. Merges results and aggregates token usage
-
-### Flexible Body Parsing
-The Express app accepts raw JSON strings, JSON arrays, and newline-delimited JSON objects — parsing them all into a unified `req.body` structure before reaching the controllers.
 
 ---
 
@@ -258,7 +287,9 @@ The Express app accepts raw JSON strings, JSON arrays, and newline-delimited JSO
 | Package | Purpose |
 |---|---|
 | `express` | Web framework |
-| `@google/genai` | Google Gemini AI SDK |
+| `@google/genai` | Google Gemini AI SDK (Provider 1) |
+| `openai` | OpenAI SDK (Provider 2) |
+| `@anthropic-ai/sdk` | Anthropic Claude SDK (Provider 3) |
 | `dotenv` | Environment variable management |
 | `winston` | Structured logging |
 | `nodemon` | Dev auto-restart |
