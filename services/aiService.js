@@ -197,11 +197,48 @@ export const parseJSONResponse = (text) => {
 };
 
 /**
+ * Configurable significance threshold (e.g. ±5%)
+ */
+export const SIGNIFICANCE_THRESHOLD_PERCENT = 5;
+
+/**
+ * 18 Core AI Insight Generation Rules for Hospitality & Restaurant Analytics
+ */
+export const AI_INSIGHT_RULES = `
+AI INSIGHT GENERATION RULES (STRICT COMPLIANCE REQUIRED):
+1. Simple Language: Use simple, everyday business language that restaurant managers can understand easily. Avoid technical, academic, or complex statistical jargon.
+2. No Internal/System Terms: Never display internal field names, coded values, database labels, system terminology, or raw variable names with underscores (e.g., never say LW_UP, LY_SALES, COMP_ID, BUBBLECHARTDATALIST, Val1). Always convert them to clean, human-readable restaurant terms.
+3. Sentence Case: Use sentence case for all insight text. Every sentence and bullet point must begin with a capital letter and end with proper punctuation.
+4. Business Overview Word Count & Length: Business Overview must be strictly limited to 60–80 words and a maximum of 4 sentences.
+5. Business Overview Content Structure: Business Overview should only explain:
+   - Sentence 1: Overall performance
+   - Sentence 2: The strongest positive
+   - Sentence 3: The biggest concern
+   - Sentence 4: The overall takeaway
+6. Key Findings Limit & Ranking: Generate a maximum of 4 Key Findings, ranked strictly by business impact (highest impact first).
+7. Key Finding Structure: Each Key Finding must clearly explain: (a) what happened, (b) the important supporting number/metric, and (c) why it matters to the business.
+8. Recommendations Limit & Finding Connection: Generate a maximum of 3 Recommendations, and directly connect each recommendation to a specific key finding.
+9. Specific & Actionable: Recommendations must be specific and actionable. Avoid generic words such as "optimise", "leverage", "strengthen", or "monitor" without explaining the concrete action the user should actually take.
+10. Zero Redundancy: Do not repeat the same information across Business Overview, Key Findings, and Recommendations. Keep each section distinct.
+11. Selective Highlighting: Do not narrate every table or KPI. Highlight only meaningful changes, exceptions, risks, and opportunities.
+12. Significance Threshold: Ignore insignificant movements unless they affect an important KPI. Disregard minor variations within ±5%.
+13. Data-Supported Causality: Never invent reasons for performance changes (e.g., do not speculate about weather, holidays, or staff issues unless explicitly provided in the data). Only state causes supported by the supplied data.
+14. No Comparison on Zero/Missing: Do not calculate or discuss comparisons, growth rates, or variances when the comparison/baseline value is zero, missing, null, or unavailable.
+15. Restaurant Terminology: Prefer restaurant terminology such as Sales, Covers, Spend per Guest, Food, Drinks, Revenue Centre, and Session over generic analytical terminology.
+16. Consistent Number Formatting: Format percentages (e.g., +8.5%, -3.2%), currencies (e.g., £1,240, $5,600), and numbers consistently, and round unnecessary decimal places.
+17. No Number Repetition: Avoid repeating the same number multiple times within the AI insight section.
+18. Context-Aware Recommendations: Recommendations must consider operational context. For example, low sales alone should not lead to a recommendation to remove a menu item without margin or profitability information.
+`;
+
+const SYSTEM_INSTRUCTION_BASE = `You are an expert AI business intelligence analyst specializing in restaurant, hospitality, and sales analytics. You MUST strictly adhere to the AI Insight Generation Rules and respond with valid, parseable JSON ONLY without any markdown code fences, preamble, or conversational filler.\n${AI_INSIGHT_RULES}`;
+
+/**
  * Unified model execution handler for Gemini, OpenAI, and Claude
  */
 export const callAIProvider = async ({ providerKey, prompt, systemInstruction }) => {
   const provider = resolveProvider(providerKey);
   const model = getProviderModel(provider);
+  const effectiveSystemInstruction = systemInstruction || SYSTEM_INSTRUCTION_BASE;
 
   logger.info(`Invoking AI Provider: [${provider.toUpperCase()}] with Model: [${model}]`);
 
@@ -213,7 +250,7 @@ export const callAIProvider = async ({ providerKey, prompt, systemInstruction })
         contents: prompt,
         config: {
           responseMimeType: "application/json",
-          ...(systemInstruction ? { systemInstruction } : {}),
+          systemInstruction: effectiveSystemInstruction,
         },
       });
 
@@ -234,12 +271,11 @@ export const callAIProvider = async ({ providerKey, prompt, systemInstruction })
 
     case AI_PROVIDERS.CLAUDE: {
       const anthropic = getClaudeClient();
-      const system = systemInstruction || "You are an expert AI business intelligence analyst. You MUST respond with valid, parseable JSON ONLY without any preamble, markdown code fences, or additional text.";
 
       const response = await anthropic.messages.create({
         model,
         max_tokens: 4096,
-        system,
+        system: effectiveSystemInstruction,
         messages: [
           { role: "user", content: prompt },
         ],
@@ -267,18 +303,10 @@ export const callAIProvider = async ({ providerKey, prompt, systemInstruction })
     case AI_PROVIDERS.OPENAI:
     default: {
       const openai = getOpenAIClient();
-      const messages = [];
-
-      if (systemInstruction) {
-        messages.push({ role: "system", content: systemInstruction });
-      } else {
-        messages.push({
-          role: "system",
-          content: "You are an expert AI business intelligence analyst. You MUST respond with valid, parseable JSON ONLY, following the requested format.",
-        });
-      }
-
-      messages.push({ role: "user", content: prompt });
+      const messages = [
+        { role: "system", content: effectiveSystemInstruction },
+        { role: "user", content: prompt },
+      ];
 
       const requestPayload = {
         model,
@@ -327,7 +355,7 @@ export const generateSingleComponentInsight = async ({ componentData, customProm
   const pageNumber = componentData.PAGE_NUMBER || componentData.page_number || 1;
   const rowRange = componentData.ROW_RANGE || componentData.row_range || null;
 
-  const contentText = `You are an expert AI business analyst for hospitality & sales data.
+  const contentText = `You are an expert AI business analyst for hospitality, restaurant management, and sales data.
 Analyze the following single component table data:
 
 COMPONENT DETAILS:
@@ -344,6 +372,8 @@ ${isLoadMore ? `NOTE FOR INCREMENTAL LOAD: This payload contains newly loaded ro
 
 ${customPrompt ? `CUSTOM USER QUESTION / INSTRUCTION:\n${customPrompt}\n` : ""}
 
+${AI_INSIGHT_RULES}
+
 CRITICAL RESPONSE REQUIREMENT:
 Return a SINGLE JSON OBJECT (not an array) matching this exact format:
 {
@@ -352,31 +382,30 @@ Return a SINGLE JSON OBJECT (not an array) matching this exact format:
   "IS_LOAD_MORE": ${!!isLoadMore},
   "PAGE_NUMBER": ${pageNumber},
   "AI_INSIGHT": {
-    "summary": "${isLoadMore ? "Concise summary of newly loaded incremental rows and their impact." : "Concise 2-3 sentence overview of this specific table/component."}",
+    "summary": "Strictly 60-80 words and max 4 sentences explaining: 1) overall performance, 2) strongest positive, 3) biggest concern, and 4) overall takeaway.",
     "status": "Positive | Warning | Critical | Neutral",
     "status_color": "green | yellow | red | blue",
     "key_findings": [
-      "Finding 1 with specific numbers/variances",
-      "Finding 2 with specific numbers/variances"
+      "Maximum of 4 findings ranked by impact. Each finding must explain: what happened, supporting number, and why it matters."
     ],
     "top_highlights": [
-      "Highlight 1"
+      "Key highlight in sentence case"
     ],
     "metrics_summary": {
       "total_value": "formatted string if available",
-      "variance_vs_budget": "formatted % if available",
-      "variance_vs_last_year": "formatted % if available"
+      "variance_vs_budget": "formatted % if available and non-zero baseline",
+      "variance_vs_last_year": "formatted % if available and non-zero baseline"
     },
     "recommendations": [
-      "Actionable recommendation 1"
+      "Maximum of 3 specific and actionable recommendations directly connected to findings without generic buzzwords."
     ],
     "AI_COMMENTARY": {
-      "overview": "Comprehensive executive commentary overview for the AI Commentary widget.",
+      "overview": "Concise executive overview (60-80 words, max 4 sentences) for the commentary widget.",
       "sections": [
         {
-          "title": "SECTION TITLE (e.g. PRODUCT DETAILS, CART, CHECKOUT, SALES, COGS, PROFIT)",
+          "title": "SECTION TITLE (e.g. Sales, Covers, Food, Drinks, Spend per Guest)",
           "trend": "up | down | neutral",
-          "commentary": "Specific commentary text for this section."
+          "commentary": "Specific commentary text in sentence case."
         }
       ]
     }
@@ -436,43 +465,39 @@ const processSingleBatch = async ({ prompt, dataBatch, provider }) => {
 
   contentText += `CRITICAL INSTRUCTIONS FOR EXECUTIVE AI COMMENTARY:
 
-You are a Senior AI Business Intelligence Analyst for hospitality and enterprise sales analytics.
-Perform an in-depth, data-driven executive analysis across all provided JSON components (e.g. Sales, Category Mix, Menu Profitability, Top/Bottom Sellers, Covers, Costs, or Bubble Chart distributions).
+You are a Senior AI Business Intelligence Analyst for hospitality and restaurant sales analytics.
+Perform an in-depth, data-driven executive analysis across all provided JSON components (e.g. Sales, Covers, Spend per Guest, Food & Drinks Category Mix, Menu Profitability, Top/Bottom Sellers, Revenue Centres, or Sessions).
 
-REQUIREMENT FOR OVERVIEW:
-Provide an extensive, multi-paragraph executive commentary (250-400 words across 2-4 comprehensive paragraphs).
-- Paragraph 1: Executive performance summary covering total revenue/amount contributions, dominant categories (e.g., Food vs Drinks vs Wine), and overall profitability drivers.
-- Paragraph 2: In-depth product mix & item dynamics highlighting standout top contributors and bottom-performing/low-velocity items with exact figures and percentages.
-- Paragraph 3: Operational risks, margin opportunities, or structural volume patterns observed in the data.
+${AI_INSIGHT_RULES}
 
 Return a SINGLE CONSOLIDATED JSON OBJECT matching this exact structure:
 
 {
   "title": "Executive AI Commentary",
   "ai_commentary": {
-    "overview": "Detailed multi-paragraph executive analysis synthesizing key financial metrics, category breakdowns, top and bottom performers, and revenue mix from the provided dataset.",
+    "overview": "Business Overview strictly 60–80 words and maximum 4 sentences. Sentence 1: overall performance. Sentence 2: strongest positive. Sentence 3: biggest concern. Sentence 4: overall takeaway.",
     "status": "Critical | Warning | Positive | Neutral",
     "status_color": "red | yellow | green | blue",
     "key_findings": [
-      "High-impact data finding 1 with exact figures (£/count/%) from the data",
-      "High-impact data finding 2 with exact figures (£/count/%) from the data",
-      "High-impact data finding 3 with exact figures (£/count/%) from the data",
-      "High-impact data finding 4 with exact figures (£/count/%) from the data",
-      "High-impact data finding 5 with exact figures (£/count/%) from the data"
+      "Finding 1 (highest impact): explain what happened, supporting number, and why it matters.",
+      "Finding 2: explain what happened, supporting number, and why it matters.",
+      "Finding 3: explain what happened, supporting number, and why it matters.",
+      "Finding 4: explain what happened, supporting number, and why it matters."
     ],
     "recommendations": [
-      "Strategic actionable recommendation 1 based on the data",
-      "Strategic actionable recommendation 2 based on the data",
-      "Strategic actionable recommendation 3 based on the data",
-      "Strategic actionable recommendation 4 based on the data"
+      "Recommendation 1: specific, actionable step directly connected to finding 1 without generic buzzwords.",
+      "Recommendation 2: specific, actionable step directly connected to finding 2 without generic buzzwords.",
+      "Recommendation 3: specific, actionable step directly connected to finding 3 without generic buzzwords."
     ]
   }
 }
 
 STRICT CONSTRAINTS:
 1. Do NOT include any "sections" array.
-2. Provide 4-6 specific key findings and 3-5 concrete recommendations.
-3. Every finding MUST cite exact metrics, labels, and numbers from the provided input data.
+2. Overview MUST be strictly 60–80 words and maximum 4 sentences.
+3. Provide a MAXIMUM of 4 Key Findings, ranked by business impact. Each must state what happened, supporting number, and why it matters.
+4. Provide a MAXIMUM of 3 Recommendations, directly connected to findings and specific/actionable.
+5. Adhere strictly to all 18 AI Insight Generation Rules.
 `;
 
   console.log("PAYLOAD SENT TO AI PROVIDER ====================", JSON.stringify(dataBatch, null, 2));

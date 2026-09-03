@@ -139,7 +139,7 @@ http://localhost:3000/api/ai
 
 ### `POST /api/ai/chat`
 
-Generates an **Executive AI Commentary** by analyzing one or more data components. Supports large payloads (>20 components) with parallel batching.
+Generates an **Executive AI Commentary** adhering to the 18 AI Insight Generation Rules by analyzing one or more data components. Supports large payloads (>20 components) with parallel batching.
 
 #### Request Headers / Query Params
 
@@ -178,23 +178,26 @@ Content-Type: application/json
   "data": {
     "title": "Executive AI Commentary",
     "ai_commentary": {
-      "overview": "Extensive multi-paragraph executive analysis (400-600 words)...",
+      "overview": "Overall restaurant performance remained solid this week with total sales reaching £48,500. Drinks sales represented the strongest positive, growing by 12.4% driven by higher cocktail velocity during evening sessions. Conversely, weekday lunch covers dropped by 8.1%, presenting the biggest concern for table utilisation. Focus on weekday lunch promotions to rebuild covers while maintaining evening beverage momentum.",
       "status": "Warning",
       "status_color": "yellow",
       "key_findings": [
-        "YTD Sales reached £1.2M, down 8% YoY due to Week 23–29 trading blackout...",
-        "..."
+        "Evening drinks sales surged to £18,200 (+12.4%), boosting total wet revenue significantly.",
+        "Weekday lunch covers declined by 8.1% to 320 guests, dampening midday food turnover.",
+        "Average spend per guest increased by £2.10 to £34.50, partially offsetting the lower covers.",
+        "Dessert attachment rate fell to 14.2% (-6.0%), reducing potential incremental revenue per table."
       ],
       "recommendations": [
-        "Accelerate post-reopening marketing to recover lost covers in Q3...",
-        "..."
+        "Introduce a targeted two-course express lunch menu priced at £18.50 to recover weekday midday covers.",
+        "Train front-of-house staff on pairing dessert wines and after-dinner coffees to lift dessert attachment rate.",
+        "Extend the weekend signature cocktail feature into Thursday evening sessions to capitalize on beverage demand."
       ]
     }
   },
   "token_usage": {
-    "prompt_tokens": 4200,
-    "candidates_tokens": 850,
-    "total_tokens": 5050
+    "prompt_tokens": 1200,
+    "candidates_tokens": 320,
+    "total_tokens": 1520
   }
 }
 ```
