@@ -4,52 +4,125 @@ import { getClaudeClient } from "../config/claude.js";
 import { AI_PROVIDERS, resolveProvider, getProviderModel } from "../config/aiProviders.js";
 import logger from "../config/logger.js";
 
+const IGNORED_METADATA_KEYS = new Set([
+  "OBJ_PI_INPUT_MODEL", "obj_pi_input_model",
+  "COLORS", "colors",
+  "SHOWXAXIS", "SHOWYAXIS", "SHOWY2AXIS", "STACKED", "LEGEND", "LW_UP", "LY_UP", "WEEKDAY_ID",
+  "MIN", "MAX", "TICK_AMOUNT", "MAX_X", "MAX_Y", "NEGATIVE_MAX",
+  "ACTUALFILEPATH", "FILE_PATH", "FILE_NAME", "RETURN_FILE_NAME", "FOLDER_NAME",
+  "SP_NAME", "SP_PARAMETERS", "SP_EXECUTION_NAME", "SP_EXECUTION_PARAMETERS",
+  "CURRENT_TOKEN", "TITLE_VALUE", "TYPE", "CW", "LW", "LY", "LEAVE_COST",
+  "EXPORT_FLAG", "PROCESSING_FLAG", "EMAIL_SCHEDULE_ID"
+]);
+
+const ESSENTIAL_IDENTIFIERS = new Set([
+  "COMPONENT_TYPE_ID", "COMPONENT_ID", "ID", "id", "Val1"
+]);
+
 /**
- * Deeply sanitizes component data to drastically reduce token consumption:
- * 1. Removes null, undefined, false, and empty string "" properties.
- * 2. Removes 0.0 / zero-value uninformative metric fields.
- * 3. Removes empty objects {} and empty arrays [].
- * 4. Removes series arrays containing only zeros [0, 0, 0, ...] or nulls.
- * 5. Filters out component objects that contain no active data.
+ * Universally sanitizes any component or arbitrary business data structure:
+ * 1. Strips all `null`, `undefined`, empty strings `""`, whitespace-only strings, "null", "undefined", "n/a", "nan", "-", "--".
+ * 2. Removes uninformative 0/0.00% metrics (while keeping essential ID fields).
+ * 3. Recursively removes empty objects `{}` and empty arrays `[]`.
+ * 4. Strips series/lists that contain only zeros, nulls, or empty values.
+ * 5. Strips internal SQL execution configurations, file paths, and UI styling metadata.
  */
 export const sanitizeComponentData = (data) => {
   if (data === null || data === undefined) return null;
 
-  const isBlankValue = (val) => {
-    if (val === null || val === undefined || val === "" || val === false) return true;
-    if (val === 0 || val === 0.0 || val === "0" || val === "0.0" || val === "0%" || val === "0.0%") return true;
+  const isBlankValue = (val, key = "") => {
+    if (val === null || val === undefined) return true;
+
+    if (typeof val === "boolean") {
+      return val === false;
+    }
+
+    if (typeof val === "string") {
+      const trimmed = val.trim();
+      if (trimmed === "") return true;
+      const lower = trimmed.toLowerCase();
+      if (
+        lower === "null" ||
+        lower === "undefined" ||
+        lower === "n/a" ||
+        lower === "nan" ||
+        lower === "none" ||
+        lower === "-" ||
+        lower === "--"
+      ) {
+        return true;
+      }
+      if (!ESSENTIAL_IDENTIFIERS.has(key)) {
+        if (
+          lower === "0" ||
+          lower === "0.0" ||
+          lower === "0.00" ||
+          lower === "0%" ||
+          lower === "0.0%" ||
+          lower === "0.00%"
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (typeof val === "number") {
+      if (isNaN(val)) return true;
+      if (!ESSENTIAL_IDENTIFIERS.has(key) && val === 0) return true;
+      return false;
+    }
+
     return false;
   };
 
   const isEmptySeries = (arr) => {
     if (!Array.isArray(arr)) return false;
-    return arr.length === 0 || arr.every((val) => isBlankValue(val));
+    if (arr.length === 0) return true;
+    return arr.every((item) => {
+      if (item === null || item === undefined) return true;
+      if (typeof item === "string") return isBlankValue(item);
+      if (typeof item === "number") return item === 0 || isNaN(item);
+      if (Array.isArray(item)) return isEmptySeries(item);
+      if (typeof item === "object") return Object.keys(item).length === 0;
+      return false;
+    });
   };
 
-  const cleanObject = (obj) => {
+  const cleanObject = (obj, parentKey = "") => {
+    if (obj === null || obj === undefined) return null;
+
     if (Array.isArray(obj)) {
       if (isEmptySeries(obj)) return null;
+
       const cleanedArr = obj
-        .map(cleanObject)
+        .map((item) => cleanObject(item, parentKey))
         .filter((item) => {
           if (item === null || item === undefined) return false;
-          if (typeof item === "object" && Object.keys(item).length === 0) return false;
+          if (typeof item === "string" && isBlankValue(item, parentKey)) return false;
+          if (typeof item === "object") {
+            if (Array.isArray(item)) return item.length > 0;
+            return Object.keys(item).length > 0;
+          }
           return true;
         });
+
       return cleanedArr.length > 0 ? cleanedArr : null;
     }
 
-    if (typeof obj === "object" && obj !== null) {
+    if (typeof obj === "object") {
       const cleaned = {};
       for (const [key, value] of Object.entries(obj)) {
-        // Essential identifier keys to keep even if 0
-        const isEssentialKey = key === "COMPONENT_TYPE_ID" || key === "COMPONENT_ID" || key === "Val1";
+        if (IGNORED_METADATA_KEYS.has(key)) continue;
 
-        if (!isEssentialKey && isBlankValue(value)) continue;
+        // Skip duplicate root DISPLAY_DATA if BUBBLECHARTDATALIST exists
+        if (key === "DISPLAY_DATA" && obj.BUBBLECHARTDATALIST) continue;
+
+        if (isBlankValue(value, key)) continue;
 
         if (Array.isArray(value)) {
           if (isEmptySeries(value)) continue;
-          const cleanedArr = cleanObject(value);
+          const cleanedArr = cleanObject(value, key);
           if (cleanedArr !== null && cleanedArr.length > 0) {
             cleaned[key] = cleanedArr;
           }
@@ -57,18 +130,19 @@ export const sanitizeComponentData = (data) => {
         }
 
         if (typeof value === "object" && value !== null) {
-          const res = cleanObject(value);
+          const res = cleanObject(value, key);
           if (res !== null && Object.keys(res).length > 0) {
             cleaned[key] = res;
           }
         } else {
-          cleaned[key] = value;
+          cleaned[key] = typeof value === "string" ? value.trim() : value;
         }
       }
+
       return Object.keys(cleaned).length > 0 ? cleaned : null;
     }
 
-    return obj;
+    return isBlankValue(obj, parentKey) ? null : obj;
   };
 
   const result = cleanObject(data);
@@ -212,10 +286,13 @@ export const callAIProvider = async ({ providerKey, prompt, systemInstruction })
         response_format: { type: "json_object" },
       };
 
-      // Models like gpt-5*, o1*, o3*, or nano only support default temperature (1) or omitting temperature
-      const isFixedTemperatureModel = /^(gpt-5|o1|o3|o-)/i.test(model) || model.toLowerCase().includes("nano");
-      if (!isFixedTemperatureModel) {
+      // Models like gpt-5*, o1*, o3*, o4*, or nano support reasoning_effort
+      const isReasoningModel = /^(gpt-5|o1|o3|o4|o-)/i.test(model) || model.toLowerCase().includes("nano");
+      if (!isReasoningModel) {
         requestPayload.temperature = 0.2;
+      } else {
+        // Drastically speeds up OpenAI reasoning models (gpt-5-nano, o3-mini, etc.)
+        requestPayload.reasoning_effort = (process.env.OPENAI_REASONING_EFFORT || "low").trim().toLowerCase();
       }
 
       const response = await openai.chat.completions.create(requestPayload);
@@ -357,50 +434,45 @@ const processSingleBatch = async ({ prompt, dataBatch, provider }) => {
     contentText += `User Instructions:\n${prompt}\n\n`;
   }
 
-  contentText += `CRITICAL INSTRUCTIONS FOR EXTENSIVE, IN-DEPTH EXECUTIVE AI COMMENTARY:
+  contentText += `CRITICAL INSTRUCTIONS FOR EXECUTIVE AI COMMENTARY:
 
-You are a Senior AI Business Intelligence Analyst for hospitality and enterprise sales data.
-You MUST perform an exhaustive data mining across ALL provided JSON components (Sales, Profitability, Staff Costs, COGS, Covers, Site Performance, Product Mix, SPH Trends, Trading Outages, etc.).
+You are a Senior AI Business Intelligence Analyst for hospitality and enterprise sales analytics.
+Perform an in-depth, data-driven executive analysis across all provided JSON components (e.g. Sales, Category Mix, Menu Profitability, Top/Bottom Sellers, Covers, Costs, or Bubble Chart distributions).
 
-REQUIREMENT FOR OVERVIEW LENGTH:
-The "overview" field MUST be an EXTENSIVE, HIGHLY-DETAILED, MULTI-PARAGRAPH ANALYSIS (at least 400 to 600 words across 4-5 paragraphs). Do NOT return a short or brief summary. 
-
-Format the "overview" text into distinct, comprehensive paragraphs covering:
-- Paragraph 1 (Executive Financial Performance): Deep dive into YTD Sales, YTD Guest Covers, YTD Net & Gross Profitability, COGS, Staff Costs, and overall YoY / WoW percentage variances with exact currency figures (£).
-- Paragraph 2 (Trading Outages & Weekly Timeline Analysis): Mine weekly trend numbers across all 52 weeks. Analyze peak trading periods (e.g. Weeks 1–22) versus shutdown/blackout weeks (e.g. Weeks 23–29) and initial restart figures in Week 30.
-- Paragraph 3 (Site Performance & Location Variations): Provide site-by-site comparative analysis (e.g. Bristol vs London vs Manchester), detailing sales contributions, cover counts, and site-level variances.
-- Paragraph 4 (Product Mix & SPH Trends): Mine category trends across Food, Drinks, Wine, and Spend Per Head (SPH) averages, highlighting top-performing categories and declining volume areas.
-- Paragraph 5 (Labor Overhead & Margin Efficiency): Analyze staff cost stickiness, static headcount overhang vs zero revenue during closures, and labor-to-revenue percentage ratios.
+REQUIREMENT FOR OVERVIEW:
+Provide an extensive, multi-paragraph executive commentary (250-400 words across 2-4 comprehensive paragraphs).
+- Paragraph 1: Executive performance summary covering total revenue/amount contributions, dominant categories (e.g., Food vs Drinks vs Wine), and overall profitability drivers.
+- Paragraph 2: In-depth product mix & item dynamics highlighting standout top contributors and bottom-performing/low-velocity items with exact figures and percentages.
+- Paragraph 3: Operational risks, margin opportunities, or structural volume patterns observed in the data.
 
 Return a SINGLE CONSOLIDATED JSON OBJECT matching this exact structure:
 
 {
   "title": "Executive AI Commentary",
   "ai_commentary": {
-    "overview": "Extensive, highly-detailed multi-paragraph executive analysis (400-600 words across 4-5 paragraphs). Synthesize all data points, exact currency figures (£), percentage changes (YoY & WoW), operational trading blackouts, site breakdowns, category trends, and labor efficiency into one comprehensive description.",
+    "overview": "Detailed multi-paragraph executive analysis synthesizing key financial metrics, category breakdowns, top and bottom performers, and revenue mix from the provided dataset.",
     "status": "Critical | Warning | Positive | Neutral",
     "status_color": "red | yellow | green | blue",
     "key_findings": [
-      "Extensive data-mined insight 1 with exact figures, dates/weeks, and percentage variances",
-      "Extensive data-mined insight 2 with exact figures, dates/weeks, and percentage variances",
-      "Extensive data-mined insight 3 with exact figures, dates/weeks, and percentage variances",
-      "Extensive data-mined insight 4 with exact figures, dates/weeks, and percentage variances",
-      "Extensive data-mined insight 5 with exact figures, dates/weeks, and percentage variances"
+      "High-impact data finding 1 with exact figures (£/count/%) from the data",
+      "High-impact data finding 2 with exact figures (£/count/%) from the data",
+      "High-impact data finding 3 with exact figures (£/count/%) from the data",
+      "High-impact data finding 4 with exact figures (£/count/%) from the data",
+      "High-impact data finding 5 with exact figures (£/count/%) from the data"
     ],
     "recommendations": [
-      "Strategic actionable recommendation 1 based on mined data",
-      "Strategic actionable recommendation 2 based on mined data",
-      "Strategic actionable recommendation 3 based on mined data",
-      "Strategic actionable recommendation 4 based on mined data"
+      "Strategic actionable recommendation 1 based on the data",
+      "Strategic actionable recommendation 2 based on the data",
+      "Strategic actionable recommendation 3 based on the data",
+      "Strategic actionable recommendation 4 based on the data"
     ]
   }
 }
 
 STRICT CONSTRAINTS:
-1. "overview": MUST BE VERY LONG AND EXHAUSTIVE (400-600 words / 4-5 detailed paragraphs). Do NOT make it brief or concise!
-2. DO NOT INCLUDE ANY "sections" ARRAY.
-3. "key_findings": Provide 5 to 7 detailed, high-impact findings with exact figures mined directly from the input JSON objects.
-4. "recommendations": Provide 4 to 5 concrete, actionable operational strategies.
+1. Do NOT include any "sections" array.
+2. Provide 4-6 specific key findings and 3-5 concrete recommendations.
+3. Every finding MUST cite exact metrics, labels, and numbers from the provided input data.
 `;
 
   console.log("PAYLOAD SENT TO AI PROVIDER ====================", JSON.stringify(dataBatch, null, 2));
