@@ -1,4 +1,4 @@
-import { generateResponse, generateSingleComponentInsight } from "../services/aiService.js";
+import { generateResponse, generateSingleComponentInsight, normalizeDataPayload } from "../services/aiService.js";
 import { resolveProvider } from "../config/aiProviders.js";
 
 /**
@@ -40,6 +40,8 @@ export const chat = async (req, res) => {
       }
     }
 
+    data = normalizeDataPayload(data);
+
     if (!prompt && (!data || (typeof data === "object" && Object.keys(data).length === 0))) {
       return res.status(400).json({
         success: false,
@@ -71,20 +73,23 @@ export const chat = async (req, res) => {
 };
 
 /**
- * Controller to handle single component insight request
+ * Controller to handle component insight request
+ * Strictly returns the standardized Executive AI Commentary response structure
  */
 export const getComponentInsight = async (req, res) => {
   try {
     const provider = extractProvider(req);
     let componentData = req.body;
 
-    const customPrompt = req.query?.prompt || req.headers?.prompt || (typeof req.body === "object" && !Array.isArray(req.body) ? req.body?.prompt : undefined) || "You are an expert AI Business Analyst specializing in Hospitality, Hotel Operations, Restaurant Management, and Sales Analytics.";
+    const customPrompt = req.query?.prompt || req.headers?.prompt || (typeof req.body === "object" && !Array.isArray(req.body) ? req.body?.prompt : undefined);
 
     if (componentData && typeof componentData === "object" && !Array.isArray(componentData)) {
       if (componentData.data !== undefined) {
         componentData = componentData.data;
       }
     }
+
+    componentData = normalizeDataPayload(componentData);
 
     if (!componentData || (typeof componentData === "object" && Object.keys(componentData).length === 0)) {
       return res.status(400).json({
@@ -93,27 +98,11 @@ export const getComponentInsight = async (req, res) => {
       });
     }
 
-    if (Array.isArray(componentData)) {
-      if (componentData.length === 1) {
-        componentData = componentData[0];
-      } else if (componentData.length > 1) {
-        console.log(`[Component Insight] Provider: ${provider.toUpperCase()} | Multi-component array count:`, componentData.length);
-        const response = await generateResponse({ prompt: customPrompt, data: componentData, provider });
-        return res.json({
-          success: true,
-          provider: response.provider,
-          model: response.model,
-          data: response.result,
-          token_usage: response.usageMetadata,
-        });
-      }
-    }
+    console.log(`[Component Insight] Provider: ${provider.toUpperCase()} | Data items count:`, Array.isArray(componentData) ? componentData.length : 1);
 
-    console.log(`[Component Insight] Provider: ${provider.toUpperCase()} | Single Component ID:`, componentData.COMPONENT_TYPE_ID || componentData.COMPONENT_ID);
-
-    const response = await generateSingleComponentInsight({
-      componentData,
-      customPrompt,
+    const response = await generateResponse({
+      prompt: customPrompt,
+      data: componentData,
       provider,
     });
 

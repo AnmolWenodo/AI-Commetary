@@ -20,6 +20,105 @@ const ESSENTIAL_IDENTIFIERS = new Set([
 ]);
 
 /**
+ * Normalizes input data payloads:
+ * Handles nested arrays (e.g. [[{...}]], [[[ {...} ]]], [[comp1], [comp2]]),
+ * unwrapping outer container arrays while preserving component objects.
+ */
+export const normalizeDataPayload = (data) => {
+  if (data === null || data === undefined) return data;
+
+  let current = data;
+
+  // Recursively unwrap single-element wrapper arrays (e.g. [[[{...}]]] -> [{...}])
+  while (Array.isArray(current) && current.length === 1 && Array.isArray(current[0])) {
+    current = current[0];
+  }
+
+  // If current is an array containing nested arrays, flatten completely
+  if (Array.isArray(current) && current.some((item) => Array.isArray(item))) {
+    current = current.flat(Infinity);
+  }
+
+  // Filter out any null/undefined items from array
+  if (Array.isArray(current)) {
+    return current.filter((item) => item !== null && item !== undefined);
+  }
+
+  return current;
+};
+
+/**
+ * Ensures any AI output conforms strictly to the standardized Executive AI Commentary schema:
+ * {
+ *   "title": "Executive AI Commentary",
+ *   "ai_commentary": {
+ *     "overview": "...",
+ *     "status": "Critical | Warning | Positive | Neutral",
+ *     "status_color": "red | yellow | green | blue",
+ *     "key_findings": [...],
+ *     "recommendations": [...]
+ *   }
+ * }
+ */
+export const normalizeAICommentaryResult = (parsed, rawText = "") => {
+  // If parsed is already properly structured
+  if (parsed && typeof parsed === "object" && parsed.ai_commentary) {
+    const comm = parsed.ai_commentary;
+    return {
+      title: parsed.title || "Executive AI Commentary",
+      ai_commentary: {
+        overview: comm.overview || comm.summary || "",
+        status: comm.status || "Neutral",
+        status_color: comm.status_color || "blue",
+        key_findings: Array.isArray(comm.key_findings) ? comm.key_findings : [],
+        recommendations: Array.isArray(comm.recommendations) ? comm.recommendations : [],
+      },
+    };
+  }
+
+  // If parsed has AI_INSIGHT (legacy model response or schema variation)
+  if (parsed && typeof parsed === "object" && parsed.AI_INSIGHT) {
+    const insight = parsed.AI_INSIGHT;
+    return {
+      title: "Executive AI Commentary",
+      ai_commentary: {
+        overview: insight.summary || insight.overview || insight.AI_COMMENTARY?.overview || "",
+        status: insight.status || "Neutral",
+        status_color: insight.status_color || "blue",
+        key_findings: Array.isArray(insight.key_findings) ? insight.key_findings : [],
+        recommendations: Array.isArray(insight.recommendations) ? insight.recommendations : [],
+      },
+    };
+  }
+
+  // If parsed is a flat commentary object without outer title wrapper
+  if (parsed && typeof parsed === "object" && (parsed.overview || parsed.key_findings || parsed.recommendations)) {
+    return {
+      title: parsed.title || "Executive AI Commentary",
+      ai_commentary: {
+        overview: parsed.overview || parsed.summary || "",
+        status: parsed.status || "Neutral",
+        status_color: parsed.status_color || "blue",
+        key_findings: Array.isArray(parsed.key_findings) ? parsed.key_findings : [],
+        recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
+      },
+    };
+  }
+
+  // Fallback for unparseable raw string
+  return {
+    title: "Executive AI Commentary",
+    ai_commentary: {
+      overview: typeof parsed?.rawResponse === "string" ? parsed.rawResponse : rawText,
+      status: "Neutral",
+      status_color: "blue",
+      key_findings: [],
+      recommendations: [],
+    },
+  };
+};
+
+/**
  * Universally sanitizes any component or arbitrary business data structure:
  * 1. Strips all `null`, `undefined`, empty strings `""`, whitespace-only strings, "null", "undefined", "n/a", "nan", "-", "--".
  * 2. Removes uninformative 0/0.00% metrics (while keeping essential ID fields).
@@ -29,6 +128,8 @@ const ESSENTIAL_IDENTIFIERS = new Set([
  */
 export const sanitizeComponentData = (data) => {
   if (data === null || data === undefined) return null;
+
+  const normalized = normalizeDataPayload(data);
 
   const isBlankValue = (val, key = "") => {
     if (val === null || val === undefined) return true;
@@ -145,7 +246,7 @@ export const sanitizeComponentData = (data) => {
     return isBlankValue(obj, parentKey) ? null : obj;
   };
 
-  const result = cleanObject(data);
+  const result = cleanObject(normalized);
 
   if (Array.isArray(result)) {
     return result.filter((comp) => comp !== null && typeof comp === "object" && Object.keys(comp).length > 0);
@@ -343,110 +444,11 @@ export const callAIProvider = async ({ providerKey, prompt, systemInstruction })
 };
 
 /**
- * Generate insight for a single component table data
+ * Generate insight for single or multiple components.
+ * Retained for backward-compatibility; returns the exact same standardized Executive AI Commentary structure.
  */
 export const generateSingleComponentInsight = async ({ componentData, customPrompt, provider }) => {
-  const sanitizedData = sanitizeComponentData(componentData);
-  const title = componentData.TITLE || componentData.CHART_OUTPUT_LIST?.[0]?.TITLE || "Component Table Data";
-  const componentTypeId = componentData.COMPONENT_TYPE_ID || componentData.COMPONENT_ID || null;
-
-  // Check for Incremental Load / Read More metadata
-  const isLoadMore = componentData.IS_LOAD_MORE || componentData.is_load_more || componentData.PAGE_NUMBER > 1;
-  const pageNumber = componentData.PAGE_NUMBER || componentData.page_number || 1;
-  const rowRange = componentData.ROW_RANGE || componentData.row_range || null;
-
-  const contentText = `You are an expert AI business analyst for hospitality, restaurant management, and sales data.
-Analyze the following single component table data:
-
-COMPONENT DETAILS:
-- Title: ${title}
-- Component Type ID: ${componentTypeId}
-${isLoadMore ? `- LOAD MORE / INCREMENTAL DATA: Page ${pageNumber} ${rowRange ? `(Rows: ${rowRange})` : "(Newly Appended Rows)"}` : ""}
-
-RAW COMPONENT DATA:
-\`\`\`json
-${JSON.stringify(sanitizedData, null, 2)}
-\`\`\`
-
-${isLoadMore ? `NOTE FOR INCREMENTAL LOAD: This payload contains newly loaded rows (Load More / Page ${pageNumber}). Analyze the newly appended data rows specifically and highlight their incremental impact.` : ""}
-
-${customPrompt ? `CUSTOM USER QUESTION / INSTRUCTION:\n${customPrompt}\n` : ""}
-
-${AI_INSIGHT_RULES}
-
-CRITICAL RESPONSE REQUIREMENT:
-Return a SINGLE JSON OBJECT (not an array) matching this exact format:
-{
-  "COMPONENT_TYPE_ID": ${componentTypeId},
-  "TITLE": "${title}",
-  "IS_LOAD_MORE": ${!!isLoadMore},
-  "PAGE_NUMBER": ${pageNumber},
-  "AI_INSIGHT": {
-    "summary": "Strictly 60-80 words and max 4 sentences explaining: 1) overall performance, 2) strongest positive, 3) biggest concern, and 4) overall takeaway.",
-    "status": "Positive | Warning | Critical | Neutral",
-    "status_color": "green | yellow | red | blue",
-    "key_findings": [
-      "Maximum of 4 findings ranked by impact. Each finding must explain: what happened, supporting number, and why it matters."
-    ],
-    "top_highlights": [
-      "Key highlight in sentence case"
-    ],
-    "metrics_summary": {
-      "total_value": "formatted string if available",
-      "variance_vs_budget": "formatted % if available and non-zero baseline",
-      "variance_vs_last_year": "formatted % if available and non-zero baseline"
-    },
-    "recommendations": [
-      "Maximum of 3 specific and actionable recommendations directly connected to findings without generic buzzwords."
-    ],
-    "AI_COMMENTARY": {
-      "overview": "Concise executive overview (60-80 words, max 4 sentences) for the commentary widget.",
-      "sections": [
-        {
-          "title": "SECTION TITLE (e.g. Sales, Covers, Food, Drinks, Spend per Guest)",
-          "trend": "up | down | neutral",
-          "commentary": "Specific commentary text in sentence case."
-        }
-      ]
-    }
-  }
-}
-`;
-
-  const aiResult = await callAIProvider({
-    providerKey: provider,
-    prompt: contentText,
-  });
-
-  logger.info("usageMetadata:", aiResult.usageMetadata);
-
-  const parsed = parseJSONResponse(aiResult.rawText);
-
-  if (typeof parsed === "object" && parsed !== null && !parsed.rawResponse) {
-    logger.info("parsed insight successfully");
-    return {
-      result: parsed,
-      usageMetadata: aiResult.usageMetadata,
-      provider: aiResult.provider,
-      model: aiResult.model,
-    };
-  }
-
-  return {
-    result: {
-      COMPONENT_TYPE_ID: componentTypeId,
-      TITLE: title,
-      AI_INSIGHT: {
-        summary: typeof parsed?.rawResponse === "string" ? parsed.rawResponse : aiResult.rawText,
-        status: "Neutral",
-        key_findings: [],
-        recommendations: [],
-      },
-    },
-    usageMetadata: aiResult.usageMetadata,
-    provider: aiResult.provider,
-    model: aiResult.model,
-  };
+  return generateResponse({ prompt: customPrompt, data: componentData, provider });
 };
 
 /**
@@ -456,7 +458,7 @@ const processSingleBatch = async ({ prompt, dataBatch, provider }) => {
   let contentText = "";
 
   if (dataBatch) {
-    contentText += `Below is the input JSON data containing multiple components/objects:\n\`\`\`json\n${JSON.stringify(dataBatch, null, 2)}\n\`\`\`\n\n`;
+    contentText += `Below is the input JSON data component(s) / analytics data:\n\`\`\`json\n${JSON.stringify(dataBatch, null, 2)}\n\`\`\`\n\n`;
   }
 
   if (prompt) {
@@ -510,7 +512,7 @@ STRICT CONSTRAINTS:
   const parsed = parseJSONResponse(aiResult.rawText);
 
   return {
-    result: parsed,
+    result: normalizeAICommentaryResult(parsed, aiResult.rawText),
     usageMetadata: aiResult.usageMetadata,
     provider: aiResult.provider,
     model: aiResult.model,
@@ -522,7 +524,8 @@ STRICT CONSTRAINTS:
  * Handles large payload batching across any selected provider.
  */
 export const generateResponse = async ({ prompt, data, provider }) => {
-  const sanitizedData = sanitizeComponentData(data);
+  const normalizedData = normalizeDataPayload(data);
+  const sanitizedData = sanitizeComponentData(normalizedData);
 
   if (Array.isArray(sanitizedData) && sanitizedData.length > 20) {
     logger.info(`Large payload detected (${sanitizedData.length} components). Batching into parallel chunks of 20 components...`);
@@ -537,16 +540,26 @@ export const generateResponse = async ({ prompt, data, provider }) => {
       batches.map((dataBatch) => processSingleBatch({ prompt, dataBatch, provider }))
     );
 
-    const mergedResult = [];
     const aggregatedUsage = { prompt_tokens: 0, candidates_tokens: 0, total_tokens: 0 };
     let finalProvider = null;
     let finalModel = null;
 
+    if (batchResults.length === 1) {
+      return batchResults[0];
+    }
+
+    const mergedFindings = [];
+    const mergedRecommendations = [];
+    const statuses = [];
+    let primaryOverview = "";
+
     for (const batchRes of batchResults) {
-      if (Array.isArray(batchRes.result)) {
-        mergedResult.push(...batchRes.result);
-      } else {
-        mergedResult.push(batchRes.result);
+      const comm = batchRes.result?.ai_commentary;
+      if (comm) {
+        if (!primaryOverview && comm.overview) primaryOverview = comm.overview;
+        if (comm.status) statuses.push(comm.status);
+        if (Array.isArray(comm.key_findings)) mergedFindings.push(...comm.key_findings);
+        if (Array.isArray(comm.recommendations)) mergedRecommendations.push(...comm.recommendations);
       }
 
       aggregatedUsage.prompt_tokens += batchRes.usageMetadata.prompt_tokens;
@@ -556,9 +569,24 @@ export const generateResponse = async ({ prompt, data, provider }) => {
       finalModel = batchRes.model;
     }
 
+    const statusPriority = { Critical: 4, Warning: 3, Positive: 2, Neutral: 1 };
+    const bestStatus = statuses.sort((a, b) => (statusPriority[b] || 0) - (statusPriority[a] || 0))[0] || "Neutral";
+    const statusColorMap = { Critical: "red", Warning: "yellow", Positive: "green", Neutral: "blue" };
+
+    const consolidatedResult = {
+      title: "Executive AI Commentary",
+      ai_commentary: {
+        overview: primaryOverview || "Consolidated executive commentary across all component batches.",
+        status: bestStatus,
+        status_color: statusColorMap[bestStatus] || "blue",
+        key_findings: mergedFindings.slice(0, 4),
+        recommendations: mergedRecommendations.slice(0, 3),
+      },
+    };
+
     logger.info(`Successfully processed ${sanitizedData.length} components across ${batches.length} parallel batches.`);
     return {
-      result: mergedResult,
+      result: consolidatedResult,
       usageMetadata: aggregatedUsage,
       provider: finalProvider,
       model: finalModel,
@@ -569,6 +597,8 @@ export const generateResponse = async ({ prompt, data, provider }) => {
 };
 
 export default {
+  normalizeDataPayload,
+  normalizeAICommentaryResult,
   sanitizeComponentData,
   parseJSONResponse,
   callAIProvider,

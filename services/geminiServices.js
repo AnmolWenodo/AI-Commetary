@@ -8,6 +8,8 @@ export {
   callAIProvider,
   generateSingleComponentInsight,
   generateResponse,
+  normalizeDataPayload,
+  normalizeAICommentaryResult,
 } from "./aiService.js";
 
 import aiService from "./aiService.js";
