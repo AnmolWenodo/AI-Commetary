@@ -12,11 +12,34 @@ const IGNORED_METADATA_KEYS = new Set([
   "ACTUALFILEPATH", "FILE_PATH", "FILE_NAME", "RETURN_FILE_NAME", "FOLDER_NAME",
   "SP_NAME", "SP_PARAMETERS", "SP_EXECUTION_NAME", "SP_EXECUTION_PARAMETERS",
   "CURRENT_TOKEN", "TITLE_VALUE", "TYPE", "CW", "LW", "LY", "LEAVE_COST",
-  "EXPORT_FLAG", "PROCESSING_FLAG", "EMAIL_SCHEDULE_ID"
+  "EXPORT_FLAG", "PROCESSING_FLAG", "EMAIL_SCHEDULE_ID",
+  "BRANCH_ID", "branch_id", "BRANCHID", "BranchId", "branchId",
+  "DIM_KEY", "dim_key", "DIMKEY", "DimKey", "dimKey",
+  "SortOrder", "sortOrder", "Sort_Order", "SORT_ORDER", "SORTORDER", "sort_order",
+  "settingsTable", "settingstable", "SETTINGSTABLE", "SettingsTable",
+  "GridOutputobj", "gridOutputobj", "GRIDOUTPUTOBJ",
+  "weekList", "weeklist", "WEEKLIST", "WeekList",
+  "RevenueCenterHeaderList", "revenueCenterHeaderList", "REVENUECENTERHEADERLIST", "Revenuecenterheaderlist",
+  "dimensionNameByKey", "dimensionnamebykey", "DIMENSIONNAMEBYKEY", "DimensionNameByKey",
+  "listvalue", "listValue", "LISTVALUE", "ListValue",
+  "IS_AVERAGE_CLS", "is_average_cls", "isAverageCls",
+  "SALES_DEM_COUNT", "COVERS_DEM_COUNT", "SPH_DEM_COUNT", "SALES_COUNT", "COVERS_COUNT", "SPH_COUNT", "LY_LW_ROW_COUNT", "DEM_COUNT",
+  "Val4", "Val5", "Val6", "Val7", "Val8", "Val9", "Val10", "Val11", "Val12", "Val13", "Val14", "Val15", "Val16", "Val17", "Val18", "Val19", "Val20", "Val21", "Val22", "Val23", "Val24", "Val25", "Val26",
+  "Val31", "Val32", "Val33", "Val34", "Val35", "Val36", "Val37", "Val38",
+  "d_NET", "d_COVERS", "d_YTDCovers", "d_AvgSPH", "d_LYGrossSales", "d_LYCovers", "d_LYAvgSPH", "d_GROSS", "d_SPH", "d_LY_NET", "d_LY_GROSS",
+  "CW_UP_DOWN", "LW_UP_DOWN", "SORT_ORDER",
+  "VARIANCE_PERCENT_VALUE",
+  "IS_LOAD_MORE", "PAGE_NUMBER", "ROW_COUNT", "TOTAL_ROWS",
+  "HEADER_NAME", "header_name", "LABELS", "labels",
+  "ID", "id", "Id",
+  "SHOW_DETAILS", "SHOWDETAILS", "DRILLDOWN", "DRILL_DOWN"
 ]);
 
-const ESSENTIAL_IDENTIFIERS = new Set([
-  "COMPONENT_TYPE_ID", "COMPONENT_ID", "ID", "id", "Val1"
+const DESCRIPTOR_KEYS = new Set([
+  "NAME", "name", "TITLE", "title", "LABEL", "label", "KEY", "key",
+  "DIMENSION", "dimension", "DIMENSION_BY", "dimension_by",
+  "VARIANCE_TEXT", "variance_text", "SESSION", "session", "CATEGORY", "category",
+  "PERIOD", "period", "DATE", "date", "HEADER", "header", "COMPONENT_TYPE_ID", "GRID_TITLE"
 ]);
 
 /**
@@ -121,17 +144,17 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
 /**
  * Universally sanitizes any component or arbitrary business data structure:
  * 1. Strips all `null`, `undefined`, empty strings `""`, whitespace-only strings, "null", "undefined", "n/a", "nan", "-", "--".
- * 2. Removes uninformative 0/0.00% metrics (while keeping essential ID fields).
- * 3. Recursively removes empty objects `{}` and empty arrays `[]`.
- * 4. Strips series/lists that contain only zeros, nulls, or empty values.
- * 5. Strips internal SQL execution configurations, file paths, and UI styling metadata.
+ * 2. Strips all 0 / 0.00 / 0% / false values.
+ * 3. Strips internal SQL execution configurations, file paths, IDs, UI styling, and toggle metadata.
+ * 4. Filters out row entries in arrays that contain only descriptor names without any actual non-zero metrics.
+ * 5. Recursively removes empty objects `{}` and empty arrays `[]`.
  */
 export const sanitizeComponentData = (data) => {
   if (data === null || data === undefined) return null;
 
   const normalized = normalizeDataPayload(data);
 
-  const isBlankValue = (val, key = "") => {
+  const isBlankValue = (val) => {
     if (val === null || val === undefined) return true;
 
     if (typeof val === "boolean") {
@@ -149,29 +172,22 @@ export const sanitizeComponentData = (data) => {
         lower === "nan" ||
         lower === "none" ||
         lower === "-" ||
-        lower === "--"
+        lower === "--" ||
+        lower === "0" ||
+        lower === "0.0" ||
+        lower === "0.00" ||
+        lower === "0%" ||
+        lower === "0.0%" ||
+        lower === "0.00%" ||
+        lower === "0.00 %"
       ) {
         return true;
-      }
-      if (!ESSENTIAL_IDENTIFIERS.has(key)) {
-        if (
-          lower === "0" ||
-          lower === "0.0" ||
-          lower === "0.00" ||
-          lower === "0%" ||
-          lower === "0.0%" ||
-          lower === "0.00%"
-        ) {
-          return true;
-        }
       }
       return false;
     }
 
     if (typeof val === "number") {
-      if (isNaN(val)) return true;
-      if (!ESSENTIAL_IDENTIFIERS.has(key) && val === 0) return true;
-      return false;
+      return val === 0 || isNaN(val);
     }
 
     return false;
@@ -190,22 +206,27 @@ export const sanitizeComponentData = (data) => {
     });
   };
 
-  const cleanObject = (obj, parentKey = "") => {
+  const cleanObject = (obj) => {
     if (obj === null || obj === undefined) return null;
 
     if (Array.isArray(obj)) {
       if (isEmptySeries(obj)) return null;
 
       const cleanedArr = obj
-        .map((item) => cleanObject(item, parentKey))
+        .map((item) => cleanObject(item))
         .filter((item) => {
           if (item === null || item === undefined) return false;
-          if (typeof item === "string" && isBlankValue(item, parentKey)) return false;
+          if (typeof item === "string" && isBlankValue(item)) return false;
           if (typeof item === "object") {
             if (Array.isArray(item)) return item.length > 0;
-            return Object.keys(item).length > 0;
+            const keys = Object.keys(item);
+            if (keys.length === 0) return false;
+            // If row only has descriptor keys (e.g. { NAME: "Breakfast" }) without any actual metric/value fields, drop it
+            const onlyDescriptors = keys.every((k) => DESCRIPTOR_KEYS.has(k));
+            if (onlyDescriptors) return false;
+            return true;
           }
-          return true;
+          return !isBlankValue(item);
         });
 
       return cleanedArr.length > 0 ? cleanedArr : null;
@@ -219,11 +240,25 @@ export const sanitizeComponentData = (data) => {
         // Skip duplicate root DISPLAY_DATA if BUBBLECHARTDATALIST exists
         if (key === "DISPLAY_DATA" && obj.BUBBLECHARTDATALIST) continue;
 
-        if (isBlankValue(value, key)) continue;
+        // Skip root-level UI column mapping lists if GridOutputList/GridOutputlist exists
+        if ((key === "CatList" || key === "catList") && (obj.GridOutputList || obj.GridOutputlist || obj.gridOutputList || obj.gridOutputlist)) continue;
+
+        if (isBlankValue(value)) continue;
+
+        // In ChangeViewobj or settings objects, ignore internal boolean flags & numeric codes
+        if (key === "ChangeViewobj" && typeof value === "object" && value !== null) {
+          const viewObj = {};
+          if (value.VARIANCE_TEXT && !isBlankValue(value.VARIANCE_TEXT)) viewObj.VARIANCE_TEXT = value.VARIANCE_TEXT;
+          if (value.DIMENSION_BY && !isBlankValue(value.DIMENSION_BY)) viewObj.DIMENSION_BY = value.DIMENSION_BY;
+          if (Object.keys(viewObj).length > 0) {
+            cleaned[key] = viewObj;
+          }
+          continue;
+        }
 
         if (Array.isArray(value)) {
           if (isEmptySeries(value)) continue;
-          const cleanedArr = cleanObject(value, key);
+          const cleanedArr = cleanObject(value);
           if (cleanedArr !== null && cleanedArr.length > 0) {
             cleaned[key] = cleanedArr;
           }
@@ -231,7 +266,7 @@ export const sanitizeComponentData = (data) => {
         }
 
         if (typeof value === "object" && value !== null) {
-          const res = cleanObject(value, key);
+          const res = cleanObject(value);
           if (res !== null && Object.keys(res).length > 0) {
             cleaned[key] = res;
           }
@@ -243,7 +278,7 @@ export const sanitizeComponentData = (data) => {
       return Object.keys(cleaned).length > 0 ? cleaned : null;
     }
 
-    return isBlankValue(obj, parentKey) ? null : obj;
+    return isBlankValue(obj) ? null : obj;
   };
 
   const result = cleanObject(normalized);
@@ -452,13 +487,43 @@ export const generateSingleComponentInsight = async ({ componentData, customProm
 };
 
 /**
+ * Splits a single large component into smaller sub-components if its row arrays
+ * (e.g. GridOutputlist, CHART_OUTPUT_LIST, series) exceed character budget.
+ */
+const splitLargeComponentIfNeeded = (comp, maxChars = 80000) => {
+  if (!comp || typeof comp !== "object" || Array.isArray(comp)) return [comp];
+  const compStr = JSON.stringify(comp);
+  if (compStr.length <= maxChars) return [comp];
+
+  // Check for common large array properties
+  const arrayKey = ["GridOutputList", "GridOutputlist", "gridOutputList", "gridOutputlist", "CHART_OUTPUT_LIST", "chart_output_list", "series", "data", "rows"]
+    .find((k) => Array.isArray(comp[k]) && comp[k].length > 1);
+
+  if (!arrayKey) return [comp];
+
+  const list = comp[arrayKey];
+  const chunkSize = Math.max(1, Math.ceil(list.length / Math.ceil(compStr.length / maxChars)));
+  const chunks = [];
+
+  for (let i = 0; i < list.length; i += chunkSize) {
+    const subComp = { ...comp, [arrayKey]: list.slice(i, i + chunkSize) };
+    chunks.push(subComp);
+  }
+
+  return chunks;
+};
+
+/**
  * Process a single batch of components for Executive AI Commentary
  */
 const processSingleBatch = async ({ prompt, dataBatch, provider }) => {
   let contentText = "";
 
   if (dataBatch) {
-    contentText += `Below is the input JSON data component(s) / analytics data:\n\`\`\`json\n${JSON.stringify(dataBatch, null, 2)}\n\`\`\`\n\n`;
+    const jsonStr = JSON.stringify(dataBatch);
+    // Hard safety cap at 1.5MB to ensure it never breaches provider limits
+    const safeJsonStr = jsonStr.length > 1500000 ? jsonStr.slice(0, 1500000) + '...[truncated]' : jsonStr;
+    contentText += `Below is the input JSON data component(s) / analytics data:\n\`\`\`json\n${safeJsonStr}\n\`\`\`\n\n`;
   }
 
   if (prompt) {
@@ -502,7 +567,7 @@ STRICT CONSTRAINTS:
 5. Adhere strictly to all 18 AI Insight Generation Rules.
 `;
 
-  console.log("PAYLOAD SENT TO AI PROVIDER ====================", JSON.stringify(dataBatch, null, 2));
+  logger.info(`Payload sent to AI Provider [${provider.toUpperCase()}]: ${contentText.length} characters`);
 
   const aiResult = await callAIProvider({
     providerKey: provider,
@@ -527,14 +592,63 @@ export const generateResponse = async ({ prompt, data, provider }) => {
   const normalizedData = normalizeDataPayload(data);
   const sanitizedData = sanitizeComponentData(normalizedData);
 
-  if (Array.isArray(sanitizedData) && sanitizedData.length > 20) {
-    logger.info(`Large payload detected (${sanitizedData.length} components). Batching into parallel chunks of 20 components...`);
-    const chunkSize = 20;
-    const batches = [];
+  if (!sanitizedData) {
+    return {
+      result: normalizeAICommentaryResult({
+        ai_commentary: {
+          overview: "No active restaurant performance data was found in the provided payload after removing zero/blank metrics.",
+          status: "Neutral",
+          status_color: "blue",
+          key_findings: ["All provided metrics contained zero, null, or inactive values."],
+          recommendations: ["Ensure active operational and sales data is captured for the selected period."],
+        },
+      }),
+      usageMetadata: { prompt_tokens: 0, candidates_tokens: 0, total_tokens: 0 },
+      provider: resolveProvider(provider),
+      model: getProviderModel(resolveProvider(provider)),
+    };
+  }
 
-    for (let i = 0; i < sanitizedData.length; i += chunkSize) {
-      batches.push(sanitizedData.slice(i, i + chunkSize));
+  // Expand array of components if any single component has large nested row arrays
+  let componentList = [];
+  if (Array.isArray(sanitizedData)) {
+    for (const comp of sanitizedData) {
+      componentList.push(...splitLargeComponentIfNeeded(comp));
     }
+  } else if (typeof sanitizedData === "object") {
+    componentList = splitLargeComponentIfNeeded(sanitizedData);
+  } else {
+    componentList = [sanitizedData];
+  }
+
+  // Partition components into size-budgeted batches
+  const MAX_BATCH_CHARS = 80000;
+  const MAX_BATCH_ITEMS = 10;
+  const batches = [];
+  let currentBatch = [];
+  let currentBatchLength = 0;
+
+  for (const comp of componentList) {
+    const compLength = JSON.stringify(comp).length;
+    if (
+      currentBatch.length >= MAX_BATCH_ITEMS ||
+      (currentBatchLength + compLength > MAX_BATCH_CHARS && currentBatch.length > 0)
+    ) {
+      batches.push(currentBatch);
+      currentBatch = [comp];
+      currentBatchLength = compLength;
+    } else {
+      currentBatch.push(comp);
+      currentBatchLength += compLength;
+    }
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  if (batches.length > 1) {
+    logger.info(`Large payload detected (${componentList.length} items across ${batches.length} batches). Processing in parallel...`);
 
     const batchResults = await Promise.all(
       batches.map((dataBatch) => processSingleBatch({ prompt, dataBatch, provider }))
@@ -543,10 +657,6 @@ export const generateResponse = async ({ prompt, data, provider }) => {
     const aggregatedUsage = { prompt_tokens: 0, candidates_tokens: 0, total_tokens: 0 };
     let finalProvider = null;
     let finalModel = null;
-
-    if (batchResults.length === 1) {
-      return batchResults[0];
-    }
 
     const mergedFindings = [];
     const mergedRecommendations = [];
@@ -562,9 +672,9 @@ export const generateResponse = async ({ prompt, data, provider }) => {
         if (Array.isArray(comm.recommendations)) mergedRecommendations.push(...comm.recommendations);
       }
 
-      aggregatedUsage.prompt_tokens += batchRes.usageMetadata.prompt_tokens;
-      aggregatedUsage.candidates_tokens += batchRes.usageMetadata.candidates_tokens;
-      aggregatedUsage.total_tokens += batchRes.usageMetadata.total_tokens;
+      aggregatedUsage.prompt_tokens += batchRes.usageMetadata?.prompt_tokens || 0;
+      aggregatedUsage.candidates_tokens += batchRes.usageMetadata?.candidates_tokens || 0;
+      aggregatedUsage.total_tokens += batchRes.usageMetadata?.total_tokens || 0;
       finalProvider = batchRes.provider;
       finalModel = batchRes.model;
     }
@@ -584,7 +694,7 @@ export const generateResponse = async ({ prompt, data, provider }) => {
       },
     };
 
-    logger.info(`Successfully processed ${sanitizedData.length} components across ${batches.length} parallel batches.`);
+    logger.info(`Successfully processed ${componentList.length} components across ${batches.length} parallel batches.`);
     return {
       result: consolidatedResult,
       usageMetadata: aggregatedUsage,
@@ -593,7 +703,12 @@ export const generateResponse = async ({ prompt, data, provider }) => {
     };
   }
 
-  return processSingleBatch({ prompt, dataBatch: sanitizedData, provider });
+  // Single batch
+  const singleBatchData = batches.length === 1
+    ? (Array.isArray(sanitizedData) ? batches[0] : (batches[0].length === 1 ? batches[0][0] : batches[0]))
+    : sanitizedData;
+
+  return processSingleBatch({ prompt, dataBatch: singleBatchData, provider });
 };
 
 export default {
