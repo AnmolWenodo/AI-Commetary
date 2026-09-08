@@ -71,6 +71,35 @@ export const normalizeDataPayload = (data) => {
 };
 
 /**
+ * Strips artificial prefixes like "Finding 1:", "Finding 1 (highest impact):",
+ * "Recommendation 1:", "1.", "-", "*", etc., from insight items.
+ */
+export const cleanInsightItem = (item) => {
+  if (typeof item !== "string") return String(item || "");
+  let text = item.trim();
+  // Strip prefixes like "Finding 1:", "Finding 1 (highest impact):", "Recommendation 1:", "Key Finding 1:", "Action 1:", "1.", "-", etc.
+  text = text
+    .replace(/^(?:Key\s+Finding|Finding|Recommendation|Action|Insight)\s*\d*\s*(?:\([^)]*\))?\s*[:\-–—]?\s*/i, "")
+    .replace(/^\([^)]*(?:impact|priority|finding|recommendation)[^)]*\)\s*[:\-–—]?\s*/i, "")
+    .replace(/^[-*•]\s*/, "")
+    .replace(/^\d+[\.\)]\s*/, "")
+    .replace(/^[:\-–—]\s*/, "")
+    .trim();
+
+  if (text.length > 0) {
+    text = text.charAt(0).toUpperCase() + text.slice(1);
+  }
+  return text;
+};
+
+export const cleanInsightList = (list) => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map(cleanInsightItem)
+    .filter((item) => item.length > 0);
+};
+
+/**
  * Ensures any AI output conforms strictly to the standardized Executive AI Commentary schema:
  * {
  *   "title": "Executive AI Commentary",
@@ -93,8 +122,8 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
         overview: comm.overview || comm.summary || "",
         status: comm.status || "Neutral",
         status_color: comm.status_color || "blue",
-        key_findings: Array.isArray(comm.key_findings) ? comm.key_findings : [],
-        recommendations: Array.isArray(comm.recommendations) ? comm.recommendations : [],
+        key_findings: cleanInsightList(comm.key_findings),
+        recommendations: cleanInsightList(comm.recommendations),
       },
     };
   }
@@ -108,8 +137,8 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
         overview: insight.summary || insight.overview || insight.AI_COMMENTARY?.overview || "",
         status: insight.status || "Neutral",
         status_color: insight.status_color || "blue",
-        key_findings: Array.isArray(insight.key_findings) ? insight.key_findings : [],
-        recommendations: Array.isArray(insight.recommendations) ? insight.recommendations : [],
+        key_findings: cleanInsightList(insight.key_findings),
+        recommendations: cleanInsightList(insight.recommendations),
       },
     };
   }
@@ -122,8 +151,8 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
         overview: parsed.overview || parsed.summary || "",
         status: parsed.status || "Neutral",
         status_color: parsed.status_color || "blue",
-        key_findings: Array.isArray(parsed.key_findings) ? parsed.key_findings : [],
-        recommendations: Array.isArray(parsed.recommendations) ? parsed.recommendations : [],
+        key_findings: cleanInsightList(parsed.key_findings),
+        recommendations: cleanInsightList(parsed.recommendations),
       },
     };
   }
@@ -344,7 +373,7 @@ export const AI_INSIGHT_RULES = `
 AI INSIGHT GENERATION RULES (STRICT COMPLIANCE REQUIRED):
 1. Simple Language: Use simple, everyday business language that restaurant managers can understand easily. Avoid technical, academic, or complex statistical jargon.
 2. No Internal/System Terms: Never display internal field names, coded values, database labels, system terminology, or raw variable names with underscores (e.g., never say LW_UP, LY_SALES, COMP_ID, BUBBLECHARTDATALIST, Val1). Always convert them to clean, human-readable restaurant terms.
-3. Sentence Case: Use sentence case for all insight text. Every sentence and bullet point must begin with a capital letter and end with proper punctuation.
+3. Sentence Case & Clean Text: Use sentence case for all insight text. Every sentence and bullet point must begin with a capital letter and end with proper punctuation. Do NOT prefix bullet points or list items with labels such as "Finding 1:", "Finding 2:", "Recommendation 1:", "1.", "2.", or bullet markers (- or *). Return clean, direct narrative sentences.
 4. Business Overview Word Count & Length: Business Overview must be strictly limited to 60–80 words and a maximum of 4 sentences.
 5. Business Overview Content Structure: Business Overview should only explain:
    - Sentence 1: Overall performance
@@ -352,8 +381,8 @@ AI INSIGHT GENERATION RULES (STRICT COMPLIANCE REQUIRED):
    - Sentence 3: The biggest concern
    - Sentence 4: The overall takeaway
 6. Key Findings Limit & Ranking: Generate a maximum of 4 Key Findings, ranked strictly by business impact (highest impact first).
-7. Key Finding Structure: Each Key Finding must clearly explain: (a) what happened, (b) the important supporting number/metric, and (c) why it matters to the business.
-8. Recommendations Limit & Finding Connection: Generate a maximum of 3 Recommendations, and directly connect each recommendation to a specific key finding.
+7. Key Finding Structure: Each Key Finding must clearly explain: (a) what happened, (b) the important supporting number/metric, and (c) why it matters to the business as a clean, direct sentence without "Finding X:" prefixes.
+8. Recommendations Limit & Finding Connection: Generate a maximum of 3 Recommendations, and directly connect each recommendation to a specific key finding as a clean, actionable sentence without "Recommendation X:" prefixes.
 9. Specific & Actionable: Recommendations must be specific and actionable. Avoid generic words such as "optimise", "leverage", "strengthen", or "monitor" without explaining the concrete action the user should actually take.
 10. Zero Redundancy: Do not repeat the same information across Business Overview, Key Findings, and Recommendations. Keep each section distinct.
 11. Selective Highlighting: Do not narrate every table or KPI. Highlight only meaningful changes, exceptions, risks, and opportunities.
@@ -546,15 +575,15 @@ Return a SINGLE CONSOLIDATED JSON OBJECT matching this exact structure:
     "status": "Critical | Warning | Positive | Neutral",
     "status_color": "red | yellow | green | blue",
     "key_findings": [
-      "Finding 1 (highest impact): explain what happened, supporting number, and why it matters.",
-      "Finding 2: explain what happened, supporting number, and why it matters.",
-      "Finding 3: explain what happened, supporting number, and why it matters.",
-      "Finding 4: explain what happened, supporting number, and why it matters."
+      "Highest impact finding: explain what happened, supporting number, and why it matters as a direct narrative sentence.",
+      "Second finding: explain what happened, supporting number, and why it matters as a direct narrative sentence.",
+      "Third finding: explain what happened, supporting number, and why it matters as a direct narrative sentence.",
+      "Fourth finding: explain what happened, supporting number, and why it matters as a direct narrative sentence."
     ],
     "recommendations": [
-      "Recommendation 1: specific, actionable step directly connected to finding 1 without generic buzzwords.",
-      "Recommendation 2: specific, actionable step directly connected to finding 2 without generic buzzwords.",
-      "Recommendation 3: specific, actionable step directly connected to finding 3 without generic buzzwords."
+      "Specific, actionable step directly connected to finding 1 without generic buzzwords.",
+      "Specific, actionable step directly connected to finding 2 without generic buzzwords.",
+      "Specific, actionable step directly connected to finding 3 without generic buzzwords."
     ]
   }
 }
@@ -564,7 +593,8 @@ STRICT CONSTRAINTS:
 2. Overview MUST be strictly 60–80 words and maximum 4 sentences.
 3. Provide a MAXIMUM of 4 Key Findings, ranked by business impact. Each must state what happened, supporting number, and why it matters.
 4. Provide a MAXIMUM of 3 Recommendations, directly connected to findings and specific/actionable.
-5. Adhere strictly to all 18 AI Insight Generation Rules.
+5. Do NOT prefix findings or recommendations with "Finding 1:", "Finding 2:", "Recommendation 1:", "1.", "2.", or any bullet markers. Each item must be a clean, direct sentence.
+6. Adhere strictly to all 18 AI Insight Generation Rules.
 `;
 
   logger.info(`Payload sent to AI Provider [${provider.toUpperCase()}]: ${contentText.length} characters`);
@@ -689,8 +719,8 @@ export const generateResponse = async ({ prompt, data, provider }) => {
         overview: primaryOverview || "Consolidated executive commentary across all component batches.",
         status: bestStatus,
         status_color: statusColorMap[bestStatus] || "blue",
-        key_findings: mergedFindings.slice(0, 4),
-        recommendations: mergedRecommendations.slice(0, 3),
+        key_findings: cleanInsightList(mergedFindings).slice(0, 4),
+        recommendations: cleanInsightList(mergedRecommendations).slice(0, 3),
       },
     };
 
