@@ -7,11 +7,11 @@ import logger from "../config/logger.js";
 const IGNORED_METADATA_KEYS = new Set([
   "OBJ_PI_INPUT_MODEL", "obj_pi_input_model",
   "COLORS", "colors",
-  "SHOWXAXIS", "SHOWYAXIS", "SHOWY2AXIS", "STACKED", "LEGEND", "LW_UP", "LY_UP", "WEEKDAY_ID",
+  "SHOWXAXIS", "SHOWYAXIS", "SHOWY2AXIS", "STACKED", "LEGEND", "WEEKDAY_ID",
   "MIN", "MAX", "TICK_AMOUNT", "MAX_X", "MAX_Y", "NEGATIVE_MAX",
   "ACTUALFILEPATH", "FILE_PATH", "FILE_NAME", "RETURN_FILE_NAME", "FOLDER_NAME",
   "SP_NAME", "SP_PARAMETERS", "SP_EXECUTION_NAME", "SP_EXECUTION_PARAMETERS",
-  "CURRENT_TOKEN", "TITLE_VALUE", "TYPE", "CW", "LW", "LY", "LEAVE_COST",
+  "CURRENT_TOKEN", "TITLE_VALUE", "TYPE", "LEAVE_COST",
   "EXPORT_FLAG", "PROCESSING_FLAG", "EMAIL_SCHEDULE_ID",
   "BRANCH_ID", "branch_id", "BRANCHID", "BranchId", "branchId",
   "DIM_KEY", "dim_key", "DIMKEY", "DimKey", "dimKey",
@@ -19,18 +19,11 @@ const IGNORED_METADATA_KEYS = new Set([
   "settingsTable", "settingstable", "SETTINGSTABLE", "SettingsTable",
   "GridOutputobj", "gridOutputobj", "GRIDOUTPUTOBJ",
   "weekList", "weeklist", "WEEKLIST", "WeekList",
-  "RevenueCenterHeaderList", "revenueCenterHeaderList", "REVENUECENTERHEADERLIST", "Revenuecenterheaderlist",
   "dimensionNameByKey", "dimensionnamebykey", "DIMENSIONNAMEBYKEY", "DimensionNameByKey",
   "listvalue", "listValue", "LISTVALUE", "ListValue",
   "IS_AVERAGE_CLS", "is_average_cls", "isAverageCls",
   "SALES_DEM_COUNT", "COVERS_DEM_COUNT", "SPH_DEM_COUNT", "SALES_COUNT", "COVERS_COUNT", "SPH_COUNT", "LY_LW_ROW_COUNT", "DEM_COUNT",
-  "Val4", "Val5", "Val6", "Val7", "Val8", "Val9", "Val10", "Val11", "Val12", "Val13", "Val14", "Val15", "Val16", "Val17", "Val18", "Val19", "Val20", "Val21", "Val22", "Val23", "Val24", "Val25", "Val26",
-  "Val31", "Val32", "Val33", "Val34", "Val35", "Val36", "Val37", "Val38",
-  "d_NET", "d_COVERS", "d_YTDCovers", "d_AvgSPH", "d_LYGrossSales", "d_LYCovers", "d_LYAvgSPH", "d_GROSS", "d_SPH", "d_LY_NET", "d_LY_GROSS",
-  "CW_UP_DOWN", "LW_UP_DOWN", "SORT_ORDER",
-  "VARIANCE_PERCENT_VALUE",
   "IS_LOAD_MORE", "PAGE_NUMBER", "ROW_COUNT", "TOTAL_ROWS",
-  "HEADER_NAME", "header_name", "LABELS", "labels",
   "ID", "id", "Id",
   "SHOW_DETAILS", "SHOWDETAILS", "DRILLDOWN", "DRILL_DOWN"
 ]);
@@ -77,14 +70,17 @@ export const normalizeDataPayload = (data) => {
 export const cleanInsightItem = (item) => {
   if (typeof item !== "string") return String(item || "");
   let text = item.trim();
-  // Strip prefixes like "Finding 1:", "Finding 1 (highest impact):", "Recommendation 1:", "Key Finding 1:", "Action 1:", "1.", "-", etc.
-  text = text
-    .replace(/^(?:Key\s+Finding|Finding|Recommendation|Action|Insight)\s*\d*\s*(?:\([^)]*\))?\s*[:\-–—]?\s*/i, "")
-    .replace(/^\([^)]*(?:impact|priority|finding|recommendation)[^)]*\)\s*[:\-–—]?\s*/i, "")
-    .replace(/^[-*•]\s*/, "")
-    .replace(/^\d+[\.\)]\s*/, "")
-    .replace(/^[:\-–—]\s*/, "")
-    .trim();
+  let prev = "";
+  while (text !== prev) {
+    prev = text;
+    text = text
+      .replace(/^\d+[\.\)]\s*/, "")
+      .replace(/^[-*•]\s*/, "")
+      .replace(/^(?:Key\s+Finding|Finding|Recommendation|Action|Insight)\s*\d*\s*(?:\([^)]*\))?\s*[:\-–—]?\s*/i, "")
+      .replace(/^\([^)]*(?:impact|priority|finding|recommendation)[^)]*\)\s*[:\-–—]?\s*/i, "")
+      .replace(/^[:\-–—]\s*/, "")
+      .trim();
+  }
 
   if (text.length > 0) {
     text = text.charAt(0).toUpperCase() + text.slice(1);
@@ -97,6 +93,42 @@ export const cleanInsightList = (list) => {
   return list
     .map(cleanInsightItem)
     .filter((item) => item.length > 0);
+};
+
+/**
+ * Ensures narrative consistency between Overview and Key Findings:
+ * - If Overview or data indicates a notable decline/drop, findings must not describe it as "steady but down" or "steady".
+ */
+export const alignSentimentAndCleanFindings = (overview, findings) => {
+  if (!Array.isArray(findings)) return [];
+  const overviewLower = (overview || "").toLowerCase();
+  const hasDeclineSentiment =
+    overviewLower.includes("decline") ||
+    overviewLower.includes("drop") ||
+    overviewLower.includes("down") ||
+    overviewLower.includes("fall") ||
+    overviewLower.includes("contract") ||
+    overviewLower.includes("slump") ||
+    overviewLower.includes("decrease") ||
+    overviewLower.includes("loss");
+
+  return findings.map((finding) => {
+    if (typeof finding !== "string") return finding;
+    let text = finding;
+
+    if (hasDeclineSentiment || /\bdown\b/i.test(text) || /-\d+%/i.test(text) || /decline/i.test(text)) {
+      text = text.replace(/steady but down/gi, "downward trending");
+      text = text.replace(/steady and down/gi, "down");
+      text = text.replace(/steady but declining/gi, "declining");
+      text = text.replace(/steady but falling/gi, "falling");
+      text = text.replace(/steady despite/gi, "declining despite");
+      text = text.replace(/remains steady despite/gi, "declined despite");
+      text = text.replace(/holding steady despite/gi, "contracted despite");
+      text = text.replace(/steady but lower/gi, "lower");
+    }
+
+    return text;
+  });
 };
 
 /**
@@ -116,13 +148,15 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
   // If parsed is already properly structured
   if (parsed && typeof parsed === "object" && parsed.ai_commentary) {
     const comm = parsed.ai_commentary;
+    const overview = comm.overview || comm.summary || "";
+    const findings = alignSentimentAndCleanFindings(overview, cleanInsightList(comm.key_findings));
     return {
       title: parsed.title || "Executive AI Commentary",
       ai_commentary: {
-        overview: comm.overview || comm.summary || "",
+        overview,
         status: comm.status || "Neutral",
         status_color: comm.status_color || "blue",
-        key_findings: cleanInsightList(comm.key_findings),
+        key_findings: findings,
         recommendations: cleanInsightList(comm.recommendations),
       },
     };
@@ -131,13 +165,15 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
   // If parsed has AI_INSIGHT (legacy model response or schema variation)
   if (parsed && typeof parsed === "object" && parsed.AI_INSIGHT) {
     const insight = parsed.AI_INSIGHT;
+    const overview = insight.summary || insight.overview || insight.AI_COMMENTARY?.overview || "";
+    const findings = alignSentimentAndCleanFindings(overview, cleanInsightList(insight.key_findings));
     return {
       title: "Executive AI Commentary",
       ai_commentary: {
-        overview: insight.summary || insight.overview || insight.AI_COMMENTARY?.overview || "",
+        overview,
         status: insight.status || "Neutral",
         status_color: insight.status_color || "blue",
-        key_findings: cleanInsightList(insight.key_findings),
+        key_findings: findings,
         recommendations: cleanInsightList(insight.recommendations),
       },
     };
@@ -145,13 +181,15 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
 
   // If parsed is a flat commentary object without outer title wrapper
   if (parsed && typeof parsed === "object" && (parsed.overview || parsed.key_findings || parsed.recommendations)) {
+    const overview = parsed.overview || parsed.summary || "";
+    const findings = alignSentimentAndCleanFindings(overview, cleanInsightList(parsed.key_findings));
     return {
       title: parsed.title || "Executive AI Commentary",
       ai_commentary: {
-        overview: parsed.overview || parsed.summary || "",
+        overview,
         status: parsed.status || "Neutral",
         status_color: parsed.status_color || "blue",
-        key_findings: cleanInsightList(parsed.key_findings),
+        key_findings: findings,
         recommendations: cleanInsightList(parsed.recommendations),
       },
     };
@@ -173,9 +211,9 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
 /**
  * Universally sanitizes any component or arbitrary business data structure:
  * 1. Strips all `null`, `undefined`, empty strings `""`, whitespace-only strings, "null", "undefined", "n/a", "nan", "-", "--".
- * 2. Strips all 0 / 0.00 / 0% / false values.
+ * 2. Preserves valid numeric metrics (including 0 and 0.0).
  * 3. Strips internal SQL execution configurations, file paths, IDs, UI styling, and toggle metadata.
- * 4. Filters out row entries in arrays that contain only descriptor names without any actual non-zero metrics.
+ * 4. Filters out row entries in arrays that contain only descriptor names without any actual metrics.
  * 5. Recursively removes empty objects `{}` and empty arrays `[]`.
  */
 export const sanitizeComponentData = (data) => {
@@ -201,14 +239,7 @@ export const sanitizeComponentData = (data) => {
         lower === "nan" ||
         lower === "none" ||
         lower === "-" ||
-        lower === "--" ||
-        lower === "0" ||
-        lower === "0.0" ||
-        lower === "0.00" ||
-        lower === "0%" ||
-        lower === "0.0%" ||
-        lower === "0.00%" ||
-        lower === "0.00 %"
+        lower === "--"
       ) {
         return true;
       }
@@ -216,7 +247,7 @@ export const sanitizeComponentData = (data) => {
     }
 
     if (typeof val === "number") {
-      return val === 0 || isNaN(val);
+      return isNaN(val);
     }
 
     return false;
@@ -228,7 +259,7 @@ export const sanitizeComponentData = (data) => {
     return arr.every((item) => {
       if (item === null || item === undefined) return true;
       if (typeof item === "string") return isBlankValue(item);
-      if (typeof item === "number") return item === 0 || isNaN(item);
+      if (typeof item === "number") return isNaN(item);
       if (Array.isArray(item)) return isEmptySeries(item);
       if (typeof item === "object") return Object.keys(item).length === 0;
       return false;
@@ -367,7 +398,7 @@ export const parseJSONResponse = (text) => {
 export const SIGNIFICANCE_THRESHOLD_PERCENT = 5;
 
 /**
- * 18 Core AI Insight Generation Rules for Hospitality & Restaurant Analytics
+ * Core AI Insight Generation Rules for Hospitality & Restaurant Analytics
  */
 export const AI_INSIGHT_RULES = `
 AI INSIGHT GENERATION RULES (STRICT COMPLIANCE REQUIRED):
@@ -388,11 +419,43 @@ AI INSIGHT GENERATION RULES (STRICT COMPLIANCE REQUIRED):
 11. Selective Highlighting: Do not narrate every table or KPI. Highlight only meaningful changes, exceptions, risks, and opportunities.
 12. Significance Threshold: Ignore insignificant movements unless they affect an important KPI. Disregard minor variations within ±5%.
 13. Data-Supported Causality: Never invent reasons for performance changes (e.g., do not speculate about weather, holidays, or staff issues unless explicitly provided in the data). Only state causes supported by the supplied data.
-14. No Comparison on Zero/Missing: Do not calculate or discuss comparisons, growth rates, or variances when the comparison/baseline value is zero, missing, null, or unavailable.
+14. Missing Comparison Fallback (Never Drop Major Entities): Do not calculate growth rates or percentage variances when comparison/baseline data is zero, null, or unavailable. HOWEVER, NEVER ignore or omit high-volume entities simply because comparative/prior-year data is missing. If an entity (such as Le Café NAC) lacks prior-year (LY/LM/LW) comparison data, evaluate it by its CURRENT-PERIOD magnitude, absolute sales volume, covers, and portfolio contribution. High-magnitude entities representing major revenue shares (e.g. >50% or 70% of sales) must always be highlighted in findings and recommendations.
 15. Restaurant Terminology: Prefer restaurant terminology such as Sales, Covers, Spend per Guest, Food, Drinks, Revenue Centre, and Session over generic analytical terminology.
 16. Consistent Number Formatting: Format percentages (e.g., +8.5%, -3.2%), currencies (e.g., £1,240, $5,600), and numbers consistently, and round unnecessary decimal places.
 17. No Number Repetition: Avoid repeating the same number multiple times within the AI insight section.
 18. Context-Aware Recommendations: Recommendations must consider operational context. For example, low sales alone should not lead to a recommendation to remove a menu item without margin or profitability information.
+19. Temporal Glossary & Period Accuracy (NEVER SWAP CURRENT AND PRIOR PERIODS):
+   - 'CM' = Current Month (the active / latest period being reported).
+   - 'LM' = Last Month (the prior / previous comparison month. NEVER interpret 'LM' as 'Latest Month').
+   - 'CW' = Current Week (the active / latest reporting week).
+   - 'LW' = Last Week (the prior / comparison week. NEVER interpret 'LW' as 'Latest Week').
+   - 'CY' = Current Year / Current Period (active reporting period).
+   - 'LY' = Last Year / Prior Period (comparison baseline).
+   - 'CP' = Current Period; 'LP' / 'PP' = Last Period / Prior Period.
+   - When citing figures for 'in the latest period', 'current month', 'current week', or 'currently', you MUST cite CM, CW, CY, or CP. NEVER attribute LM, LW, LY, or LP values to the latest/current period.
+20. Strict Unit Integrity (Currency vs Percentage vs Units):
+   - Never confuse currency amounts (£/€/$) with percentages (%).
+   - If an item has a raw price, cost, or cash margin of 10.79, write £10.79 (or relevant currency), NEVER 10.79%.
+   - Only append '%' to true percentage metrics (e.g. gross margin %, sales share %, variance %).
+   - Verify that any reported sales or volume share corresponds to actual percentage share (e.g., 5% share), not the item's unit price or cash margin.
+21. Category Integrity (No Conflation):
+   - Strictly preserve category boundaries as defined in the data. Never merge or conflate distinct categories.
+   - For example, 'Hot Bev' (hot beverages, espresso, tea, coffee) is a distinct category and must NEVER be labeled as 'Drinks' if 'Drinks' is a separate category in the data.
+   - 'Food', 'Drinks', 'Wine', 'Hot Bev', 'Others' must each be reported under their exact category names.
+22. Materiality & Driver Threshold (No Low-Volume Drivers):
+   - Never classify an item as a 'top driver', 'key performer', or 'growth driver' based solely on a high margin percentage if its sales volume is negligible or in the bottom tier (e.g., £3 total sales).
+   - An item or category must have meaningful commercial volume or revenue share to be designated a business driver. If margin is high but volume is negligible, describe it as a low-volume niche item, not a key driver.
+23. Zero Hallucination of Reasons, Quantities & Dimensions:
+   - Only cite reason names, categories, and metrics that explicitly exist in the supplied JSON.
+   - Wastage reasons: Only cite actual reason labels present in the dataset (e.g. 'End of Day', 'Staff Meals / Drinks'). NEVER invent operational reasons such as 'Expired and spoiled items', 'breakage', or 'rotation issues' unless that exact label appears in the data.
+   - Never fabricate quantities or unit counts (e.g. do not invent numbers like '2,605 units').
+   - Dimensional integrity: Only reference dimensions explicitly present in the data. For example, if a table breaks down performance by Area × Day, do NOT attribute performance to sessions like 'Lunch' or 'Dinner' unless session fields are present.
+24. Outlier Detection (Do Not Smooth Anomalies):
+   - Do not smooth prominent category or site outliers into generic aggregate statements.
+   - If an individual category exhibits an abnormal rate (for example, Hot Bev showing 9% waste while all other categories are at 1%), explicitly call out that specific category and rate as a key finding and risk, rather than stating 'waste remains steady at 1%'.
+25. Cross-Section Sentiment & Narrative Consistency:
+   - Business Overview, Key Findings, and Recommendations must have consistent directional sentiment and tone.
+   - If Business Overview highlights a 'notable decline' in a region or category (e.g. -18% EUR sales, -15% covers), Key Findings must NEVER contradict this by describing it as 'steady' or 'stable'. A double-digit drop is a significant contraction.
 `;
 
 const SYSTEM_INSTRUCTION_BASE = `You are an expert AI business intelligence analyst specializing in restaurant, hospitality, and sales analytics. You MUST strictly adhere to the AI Insight Generation Rules and respond with valid, parseable JSON ONLY without any markdown code fences, preamble, or conversational filler.\n${AI_INSIGHT_RULES}`;
@@ -559,7 +622,29 @@ const processSingleBatch = async ({ prompt, dataBatch, provider }) => {
     contentText += `User Instructions:\n${prompt}\n\n`;
   }
 
-  contentText += `CRITICAL INSTRUCTIONS FOR EXECUTIVE AI COMMENTARY:
+  contentText += `CRITICAL TEMPORAL & DATA INTERPRETATION GUIDELINES:
+- TEMPORAL MAPPING (STRICTLY FORBIDDEN TO SWAP CURRENT AND PRIOR PERIODS):
+  * 'CM' = Current Month (the active / latest period being reported).
+  * 'LM' = Last Month (the prior / comparison month; NEVER interpret 'LM' as 'Latest Month').
+  * 'CW' = Current Week (the active / latest reporting week).
+  * 'LW' = Last Week (the prior / comparison week; NEVER interpret 'LW' as 'Latest Week').
+  * 'CY' = Current Year / Current Period (active reporting period).
+  * 'LY' = Last Year / Prior Period (comparison baseline).
+  * 'CP' = Current Period; 'LP' / 'PP' = Last Period / Prior Period.
+  * When stating numbers for 'in the latest period' or 'currently', cite CM, CW, CY, or CP. NEVER cite LM, LW, LY, or LP as the latest period!
+- CATEGORY & DIMENSION INTEGRITY:
+  * Preserve distinct categories exactly as given (e.g., 'Hot Bev' is NOT 'Drinks'; 'Wine' is NOT 'Drinks').
+  * Do NOT infer sessions (such as 'Lunch' or 'Dinner') if the data only contains Area × Day.
+  * Do NOT fabricate operational reasons (e.g., 'Expired and spoiled') or unit counts not in the JSON.
+  * High-magnitude entities missing LY (e.g., Le Café NAC) MUST be evaluated by current-period volume and sales share; never omit them!
+- UNITS & MATERIALITY:
+  * Never append '%' to monetary amounts (e.g., £10.79 is £10.79, never 10.79%).
+  * Never designate items with negligible volume (e.g., £3 sales) as top drivers or key performers.
+  * Do not smooth prominent outliers (e.g., Hot Bev at 9% waste vs 1% overall).
+- CONSISTENCY:
+  * Business Overview, Key Findings, and Recommendations must have consistent directional sentiment. If Overview highlights a decline, Key Findings must not describe it as steady.
+
+CRITICAL INSTRUCTIONS FOR EXECUTIVE AI COMMENTARY:
 
 You are a Senior AI Business Intelligence Analyst for hospitality and restaurant sales analytics.
 Perform an in-depth, data-driven executive analysis across all provided JSON components (e.g. Sales, Covers, Spend per Guest, Food & Drinks Category Mix, Menu Profitability, Top/Bottom Sellers, Revenue Centres, or Sessions).
@@ -594,7 +679,7 @@ STRICT CONSTRAINTS:
 3. Provide a MAXIMUM of 4 Key Findings, ranked by business impact. Each must state what happened, supporting number, and why it matters.
 4. Provide a MAXIMUM of 3 Recommendations, directly connected to findings and specific/actionable.
 5. Do NOT prefix findings or recommendations with "Finding 1:", "Finding 2:", "Recommendation 1:", "1.", "2.", or any bullet markers. Each item must be a clean, direct sentence.
-6. Adhere strictly to all 18 AI Insight Generation Rules.
+6. Adhere strictly to all 25 AI Insight Generation Rules.
 `;
 
   logger.info(`Payload sent to AI Provider [${provider.toUpperCase()}]: ${contentText.length} characters`);
@@ -713,13 +798,16 @@ export const generateResponse = async ({ prompt, data, provider }) => {
     const bestStatus = statuses.sort((a, b) => (statusPriority[b] || 0) - (statusPriority[a] || 0))[0] || "Neutral";
     const statusColorMap = { Critical: "red", Warning: "yellow", Positive: "green", Neutral: "blue" };
 
+    const finalOverview = primaryOverview || "Consolidated executive commentary across all component batches.";
+    const alignedMergedFindings = alignSentimentAndCleanFindings(finalOverview, cleanInsightList(mergedFindings)).slice(0, 4);
+
     const consolidatedResult = {
       title: "Executive AI Commentary",
       ai_commentary: {
-        overview: primaryOverview || "Consolidated executive commentary across all component batches.",
+        overview: finalOverview,
         status: bestStatus,
         status_color: statusColorMap[bestStatus] || "blue",
-        key_findings: cleanInsightList(mergedFindings).slice(0, 4),
+        key_findings: alignedMergedFindings,
         recommendations: cleanInsightList(mergedRecommendations).slice(0, 3),
       },
     };

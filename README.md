@@ -139,7 +139,7 @@ http://localhost:3000/api/ai
 
 ### `POST /api/ai/chat`
 
-Generates an **Executive AI Commentary** adhering to the 18 AI Insight Generation Rules by analyzing one or more data components. Supports large payloads (>20 components) with parallel batching.
+Generates an **Executive AI Commentary** adhering to the 25 AI Insight Generation Rules by analyzing one or more data components. Supports large payloads (>20 components) with parallel batching.
 
 #### Request Headers / Query Params
 
