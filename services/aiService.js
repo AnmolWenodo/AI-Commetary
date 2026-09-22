@@ -11,7 +11,7 @@ const IGNORED_METADATA_KEYS = new Set([
   "MIN", "MAX", "TICK_AMOUNT", "MAX_X", "MAX_Y", "NEGATIVE_MAX",
   "ACTUALFILEPATH", "FILE_PATH", "FILE_NAME", "RETURN_FILE_NAME", "FOLDER_NAME",
   "SP_NAME", "SP_PARAMETERS", "SP_EXECUTION_NAME", "SP_EXECUTION_PARAMETERS",
-  "CURRENT_TOKEN", "TITLE_VALUE", "TYPE", "LEAVE_COST",
+  "CURRENT_TOKEN", "TYPE", "LEAVE_COST",
   "EXPORT_FLAG", "PROCESSING_FLAG", "EMAIL_SCHEDULE_ID",
   "BRANCH_ID", "branch_id", "BRANCHID", "BranchId", "branchId",
   "DIM_KEY", "dim_key", "DIMKEY", "DimKey", "dimKey",
@@ -568,6 +568,11 @@ AI INSIGHT GENERATION RULES (STRICT COMPLIANCE REQUIRED):
    - If 'HeaderListobj' contains months (e.g., 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'), the analysis MUST strictly be presented as a Monthly / Month-over-Month analysis. All overview statements, key findings, and recommendations must reference months and monthly trends, and NEVER refer to weekly or daily intervals.
    - If 'HeaderListobj' contains days of the week (e.g., 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'), the analysis MUST strictly be presented as a Day-of-Week / Weekly analysis. NEVER refer to these as months.
    - Strictly adhere to the identified time granularity across ai_commentary, overview, key_findings, and recommendations.
+27. Purchase & Spend Hierarchy (Total Purchase Spend vs Sub-table/Kitchen Reports):
+   - When reporting Total Purchase Value / Total Purchasing Spend for the business, ALWAYS reference the overall 'Purchase By Category' figures or component header summary (e.g., TITLE_VALUE / header badge showing 'CM Cost: X | LM Cost: Y' or total category spend).
+   - NEVER confuse or substitute 'Chef\'s Report' or 'Food GP' totals (which only reflect Food/Kitchen spend, e.g. £330,386 CM vs £326,992 LM) for the overall company Total Purchase Spend (£406,447 CM vs £410,132 LM).
+   - When discussing Chef\'s Report or Food GP, explicitly identify it as Food / Kitchen spend (~80% of total spend), not the Total Purchase Value.
+   - Always ensure current period (CM/CW) and prior period (LM/LW) values are not swapped or conflated across different component scopes.
 `;
 
 const SYSTEM_INSTRUCTION_BASE = `You are an expert AI business intelligence analyst specializing in restaurant, hospitality, and sales analytics. You MUST strictly adhere to the AI Insight Generation Rules and respond with valid, parseable JSON ONLY without any markdown code fences, preamble, or conversational filler.\n${AI_INSIGHT_RULES}`;
@@ -761,6 +766,11 @@ CRITICAL TEMPORAL & DATA INTERPRETATION GUIDELINES:
   * Never append '%' to monetary amounts (e.g., £10.79 is £10.79, never 10.79%).
   * Never designate items with negligible volume (e.g., £3 sales) as top drivers or key performers.
   * Do not smooth prominent outliers (e.g., Hot Bev at 9% waste vs 1% overall).
+- PURCHASE & SPEND HIERARCHY:
+  * In Purchase Analysis, the overall Total Purchasing Spend across all categories is provided by 'Purchase By Category' or its header/badge 'TITLE_VALUE' (e.g. 'CM Cost: 406,447 | LM Cost: 410,132' or 'CM Cost: 410,132 | LM Cost: 478,964').
+  * 'Chef\'s Report' and 'Food GP' represent only the Food/Kitchen subset (e.g. £330,386 CM vs £326,992 LM), NOT the total purchase value.
+  * NEVER report Chef\'s Report or Food GP total as the overall "Total purchase value" or "Total company spend".
+  * Never swap CM (current month) and LM (last month) figures when reporting variances or spend comparisons.
 - CONSISTENCY:
   * Business Overview, Key Findings, and Recommendations must have consistent directional sentiment. If Overview highlights a decline, Key Findings must not describe it as steady.
 
@@ -799,7 +809,7 @@ STRICT CONSTRAINTS:
 3. Provide a MAXIMUM of 4 Key Findings, ranked by business impact. Each must state what happened, supporting number, and why it matters.
 4. Provide a MAXIMUM of 3 Recommendations, directly connected to findings and specific/actionable.
 5. Do NOT prefix findings or recommendations with "Finding 1:", "Finding 2:", "Recommendation 1:", "1.", "2.", or any bullet markers. Each item must be a clean, direct sentence.
-6. Adhere strictly to all 26 AI Insight Generation Rules.
+6. Adhere strictly to all 27 AI Insight Generation Rules.
 `;
 
   logger.info(`Payload sent to AI Provider [${provider.toUpperCase()}]: ${contentText.length} characters`);
