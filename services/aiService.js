@@ -25,7 +25,9 @@ const IGNORED_METADATA_KEYS = new Set([
   "SALES_DEM_COUNT", "COVERS_DEM_COUNT", "SPH_DEM_COUNT", "SALES_COUNT", "COVERS_COUNT", "SPH_COUNT", "LY_LW_ROW_COUNT", "DEM_COUNT",
   "IS_LOAD_MORE", "PAGE_NUMBER", "ROW_COUNT", "TOTAL_ROWS",
   "ID", "id", "Id",
-  "SHOW_DETAILS", "SHOWDETAILS", "DRILLDOWN", "DRILL_DOWN"
+  "SHOW_DETAILS", "SHOWDETAILS", "DRILLDOWN", "DRILL_DOWN",
+  "VISIBLE_SESSION_LIST", "VISIBLE_SESSION_COUNT", "VISIBLE_ROWSPAN",
+  "HeaderID", "headerId", "HEADERID", "HEADER_ID", "header_id"
 ]);
 
 const DESCRIPTOR_KEYS = new Set([
@@ -208,6 +210,109 @@ export const normalizeAICommentaryResult = (parsed, rawText = "") => {
   };
 };
 
+const MONTH_REGEX = /^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:[-_\s\d/]*)$/i;
+const DAY_REGEX = /^(mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)(?:[-_\s\d/]*)$/i;
+
+/**
+ * Extracts all HeaderListobj or header-related arrays from anywhere in the payload.
+ */
+export const extractHeaderLists = (data) => {
+  const headers = [];
+
+  const traverse = (node) => {
+    if (!node || typeof node !== "object") return;
+
+    if (Array.isArray(node)) {
+      for (const item of node) traverse(item);
+      return;
+    }
+
+    for (const [key, value] of Object.entries(node)) {
+      if (/^(headerlist(obj)?|header_?list|periodlist|reportingperiods|reporting_periods|periods)$/i.test(key)) {
+        if (Array.isArray(value) && value.length > 0) {
+          headers.push(value);
+        }
+      }
+      traverse(value);
+    }
+  };
+
+  traverse(data);
+  return headers;
+};
+
+/**
+ * Detects time granularity (Monthly vs Weekly/Daily) based on HeaderListobj contents.
+ */
+export const detectTimeGranularity = (data) => {
+  const headerLists = extractHeaderLists(data);
+
+  let monthCount = 0;
+  let dayCount = 0;
+  const detectedHeaders = [];
+
+  for (const list of headerLists) {
+    for (const rawItem of list) {
+      if (typeof rawItem === "string") {
+        const item = rawItem.trim();
+        if (MONTH_REGEX.test(item)) {
+          monthCount++;
+          detectedHeaders.push(item);
+        } else if (DAY_REGEX.test(item)) {
+          dayCount++;
+          detectedHeaders.push(item);
+        }
+      }
+    }
+  }
+
+  const uniqueHeaders = [...new Set(detectedHeaders)];
+
+  if (monthCount > 0 && monthCount >= dayCount) {
+    return {
+      type: "MONTHLY",
+      isMonthly: true,
+      isWeekly: false,
+      description: "Monthly Analysis (Month-by-Month breakdown)",
+      headers: uniqueHeaders,
+      promptInstruction: `TIME GRANULARITY INSTRUCTION (MONTHLY VIEW):
+The data contains a MONTHLY time series with headers: ${JSON.stringify(uniqueHeaders)}.
+- Analyze the data strictly in terms of MONTHS (e.g. Month-over-Month, referencing specific months like ${uniqueHeaders.join(", ")}).
+- Generate overview, key_findings, and recommendations referencing monthly trends, peak months, slow months, and month-over-month shifts.
+- Strictly DO NOT refer to these time columns as "weeks", "weekly", "days", "weekdays", "weekends", "Monday", "Tuesday", etc.
+- In 'overview': Summarize overall performance across the ${uniqueHeaders.length}-month period.
+- In 'key_findings': Highlight specific month performance and month-over-month variances (e.g. referencing ${uniqueHeaders.slice(0, 3).join(", ")}).
+- In 'recommendations': Provide actionable steps focused on month-level planning and future monthly strategy.`,
+    };
+  }
+
+  if (dayCount > 0) {
+    return {
+      type: "WEEKLY_OR_DAILY",
+      isMonthly: false,
+      isWeekly: true,
+      description: "Weekly / Day-of-Week Analysis (Daily / Days of Week breakdown)",
+      headers: uniqueHeaders,
+      promptInstruction: `TIME GRANULARITY INSTRUCTION (WEEKLY / DAY-OF-WEEK VIEW):
+The data contains a DAY-OF-WEEK / WEEKLY time series with headers: ${JSON.stringify(uniqueHeaders)}.
+- Analyze the data strictly in terms of DAYS OF THE WEEK / WEEKLY trends (referencing specific days like ${uniqueHeaders.join(", ")} or weekday vs weekend patterns).
+- Generate overview, key_findings, and recommendations referencing day-by-day and weekly patterns.
+- Strictly DO NOT refer to these time columns as "months", "monthly", or "month-over-month".
+- In 'overview': Summarize overall weekly performance and day-of-week distribution.
+- In 'key_findings': Highlight specific day performance (e.g. peak days, slowest days).
+- In 'recommendations': Provide actionable steps for day-specific operational optimization.`,
+    };
+  }
+
+  return {
+    type: "GENERAL",
+    isMonthly: false,
+    isWeekly: false,
+    description: "Standard Reporting Period",
+    headers: [],
+    promptInstruction: `Analyze the metrics according to the exact time periods and labels provided in the data.`,
+  };
+};
 /**
  * Universally sanitizes any component or arbitrary business data structure:
  * 1. Strips all `null`, `undefined`, empty strings `""`, whitespace-only strings, "null", "undefined", "n/a", "nan", "-", "--".
@@ -305,11 +410,13 @@ export const sanitizeComponentData = (data) => {
 
         if (isBlankValue(value)) continue;
 
-        // In ChangeViewobj or settings objects, ignore internal boolean flags & numeric codes
+        // In ChangeViewobj or settings objects, ignore internal boolean flags & numeric codes while preserving HeaderListobj & dimensional settings
         if (key === "ChangeViewobj" && typeof value === "object" && value !== null) {
           const viewObj = {};
           if (value.VARIANCE_TEXT && !isBlankValue(value.VARIANCE_TEXT)) viewObj.VARIANCE_TEXT = value.VARIANCE_TEXT;
           if (value.DIMENSION_BY && !isBlankValue(value.DIMENSION_BY)) viewObj.DIMENSION_BY = value.DIMENSION_BY;
+          if (value.HeaderListobj && Array.isArray(value.HeaderListobj)) viewObj.HeaderListobj = value.HeaderListobj;
+          if (value.headerListobj && Array.isArray(value.headerListobj)) viewObj.headerListobj = value.headerListobj;
           if (Object.keys(viewObj).length > 0) {
             cleaned[key] = viewObj;
           }
@@ -456,6 +563,11 @@ AI INSIGHT GENERATION RULES (STRICT COMPLIANCE REQUIRED):
 25. Cross-Section Sentiment & Narrative Consistency:
    - Business Overview, Key Findings, and Recommendations must have consistent directional sentiment and tone.
    - If Business Overview highlights a 'notable decline' in a region or category (e.g. -18% EUR sales, -15% covers), Key Findings must NEVER contradict this by describing it as 'steady' or 'stable'. A double-digit drop is a significant contraction.
+26. Time Granularity & Periodicity Adherence (Strict Monthly vs Weekly/Daily Distinction):
+   - Inspect 'HeaderListobj' or temporal column headers in the data.
+   - If 'HeaderListobj' contains months (e.g., 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'), the analysis MUST strictly be presented as a Monthly / Month-over-Month analysis. All overview statements, key findings, and recommendations must reference months and monthly trends, and NEVER refer to weekly or daily intervals.
+   - If 'HeaderListobj' contains days of the week (e.g., 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'), the analysis MUST strictly be presented as a Day-of-Week / Weekly analysis. NEVER refer to these as months.
+   - Strictly adhere to the identified time granularity across ai_commentary, overview, key_findings, and recommendations.
 `;
 
 const SYSTEM_INSTRUCTION_BASE = `You are an expert AI business intelligence analyst specializing in restaurant, hospitality, and sales analytics. You MUST strictly adhere to the AI Insight Generation Rules and respond with valid, parseable JSON ONLY without any markdown code fences, preamble, or conversational filler.\n${AI_INSIGHT_RULES}`;
@@ -622,7 +734,15 @@ const processSingleBatch = async ({ prompt, dataBatch, provider }) => {
     contentText += `User Instructions:\n${prompt}\n\n`;
   }
 
-  contentText += `CRITICAL TEMPORAL & DATA INTERPRETATION GUIDELINES:
+  const granularity = detectTimeGranularity(dataBatch);
+
+  contentText += `TIME GRANULARITY & PERIOD DETECTION (CRITICAL):
+- Detected Period Type: ${granularity.description}
+- Detected Headers (HeaderListobj): ${granularity.headers.length > 0 ? JSON.stringify(granularity.headers) : "None detected"}
+- TIME PERIOD INSTRUCTION:
+${granularity.promptInstruction}
+
+CRITICAL TEMPORAL & DATA INTERPRETATION GUIDELINES:
 - TEMPORAL MAPPING (STRICTLY FORBIDDEN TO SWAP CURRENT AND PRIOR PERIODS):
   * 'CM' = Current Month (the active / latest period being reported).
   * 'LM' = Last Month (the prior / comparison month; NEVER interpret 'LM' as 'Latest Month').
@@ -679,7 +799,7 @@ STRICT CONSTRAINTS:
 3. Provide a MAXIMUM of 4 Key Findings, ranked by business impact. Each must state what happened, supporting number, and why it matters.
 4. Provide a MAXIMUM of 3 Recommendations, directly connected to findings and specific/actionable.
 5. Do NOT prefix findings or recommendations with "Finding 1:", "Finding 2:", "Recommendation 1:", "1.", "2.", or any bullet markers. Each item must be a clean, direct sentence.
-6. Adhere strictly to all 25 AI Insight Generation Rules.
+6. Adhere strictly to all 26 AI Insight Generation Rules.
 `;
 
   logger.info(`Payload sent to AI Provider [${provider.toUpperCase()}]: ${contentText.length} characters`);
@@ -830,6 +950,8 @@ export const generateResponse = async ({ prompt, data, provider }) => {
 };
 
 export default {
+  extractHeaderLists,
+  detectTimeGranularity,
   normalizeDataPayload,
   normalizeAICommentaryResult,
   sanitizeComponentData,
