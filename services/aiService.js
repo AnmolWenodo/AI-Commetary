@@ -573,6 +573,50 @@ AI INSIGHT GENERATION RULES (STRICT COMPLIANCE REQUIRED):
    - NEVER confuse or substitute 'Chef\'s Report' or 'Food GP' totals (which only reflect Food/Kitchen spend, e.g. £330,386 CM vs £326,992 LM) for the overall company Total Purchase Spend (£406,447 CM vs £410,132 LM).
    - When discussing Chef\'s Report or Food GP, explicitly identify it as Food / Kitchen spend (~80% of total spend), not the Total Purchase Value.
    - Always ensure current period (CM/CW) and prior period (LM/LW) values are not swapped or conflated across different component scopes.
+28. Aggregation Column Prohibition (NEVER Label Cumulative Totals as Current Period):
+   - If the data contains a multi-period table (e.g., columns for Mar, Apr, May, Jun, Jul, Aug, Total), the rightmost "Total" or "Cumulative" column is the 6-month aggregate — it is NEVER the "Current Month" (CM) or "current period".
+   - CM must only be read from the column explicitly labelled with the most recent single period name (e.g., "Aug"). If no single-period CM column is identifiable or visible, state "cumulative total for [range]" and flag the ambiguity; never silently relabel the aggregate as the current month.
+   - This applies equally to SPH, Covers, and all other KPIs: cite only the value from the correctly scoped column, not from a Total row or Total column.
+29. LW/LM Baseline Verifiability (No Phantom Comparisons):
+   - Before citing any "vs Last Week" (LW) or "vs Last Month" (LM) comparison figure, confirm that an LW or LM column (or a row explicitly labelled LW/LM) is present in the supplied JSON data.
+   - If NO such column or row exists in the data, you MUST NOT fabricate or estimate that comparison. Omit the comparison entirely and do not use phrases like "vs Last Week", "compared to last week", "week-on-week", or similar.
+   - This applies even if LW/LM field names appear in the JSON keys: the corresponding value must be non-null and non-zero to be cited.
+30. Arithmetic Internal Consistency (No Contradictory Aggregate Claims):
+   - Before publishing any aggregate claim (e.g., "total sales were flat"), verify it is arithmetically consistent with the component variances stated in other findings.
+   - If Food is reported as −17% and Drinks as −23%, and together they represent ≥90% of revenue, then total revenue CANNOT be described as "flat" or "stable". Flag the contradiction explicitly rather than smoothing it.
+   - When the arithmetic does not add up across findings, state only what is directly supported by the raw numbers in the data; do NOT reconcile by omitting the decline figures.
+31. Partial Period Detection & Mandatory Caveat:
+   - If the latest period column shows total revenue or covers at less than 60% of the mean of the preceding three periods, treat it as a likely partial or incomplete period.
+   - DO NOT attribute reported declines to a trading problem without explicitly caveating: "Note: [Month] may be a partial period; comparisons with prior full months may be distorted."
+   - Never present a partial period vs a full prior period as evidence of a trend decline without this caveat.
+32. Date Filter vs Table Column Range Cross-Check:
+   - If the payload contains both a selected date filter field (e.g., "01 Aug – 31 Aug") and a data table spanning multiple months (e.g., Mar–Aug), explicitly note the discrepancy.
+   - Scope all narrative insights to a single, clearly stated period. Never produce an overview that simultaneously references the filter period for one metric and the full table range for another.
+   - If the narrative is scoped to the filter period (e.g., August only), cite only August column values. If scoped to the full table, state so clearly.
+33. Share Percentage Denominator Integrity:
+   - When citing an item's percentage share, always use the denominator that matches the stated context:
+     * "X% of food sales" → divide item value by the food category subtotal.
+     * "X% of net sales" → divide item value by the total net sales figure.
+     * "X% of category" → divide item value by the relevant category total.
+   - NEVER transpose denominators (e.g., do not state a food-share percentage as if it were a net-sales-share percentage or vice versa).
+   - If the data table itself displays a percentage for an item (e.g., 11.74%), cross-check your stated percentage against it; if they differ, use the table's figure and note any discrepancy.
+34. Category Count Verification:
+   - If a KPI card or header displays a category count (e.g., "10 Categories"), count the actual distinct category rows present in the table before reproducing that count.
+   - If the displayed count does not match the actual row count, flag the discrepancy in Key Findings as a data-quality issue. Do not reproduce the KPI card count as fact if it conflicts with the data.
+35. Blank / Empty Label Flag (Data-Quality Surfacing):
+   - If any category, outlet, session, or dimension label is blank, empty, unnamed, or contains only whitespace in the data, explicitly surface it as a data-quality flag in Key Findings.
+   - State: "An unnamed [category/outlet] accounts for [value / %]; this label should be reviewed and corrected in the source system."
+   - Do NOT silently skip, merge into "Other", or ignore blank labels.
+36. Bottom-Sellers Mandatory Coverage:
+   - When the data includes a bottom-sellers section, lowest-performing rows, or any explicit "bottom" ranking, at least one Key Finding AND one Recommendation must reference it.
+   - Name the specific lowest-performing item (label, quantity, revenue) as a business risk or data-quality signal (e.g., items with zero quantity may indicate bad product records).
+   - If Top and Bottom seller tables share identical rows (because a category has ≤5 items), explicitly note: "[Category] has fewer than 5 items, so its top and bottom rows overlap — treat with caution."
+   - Do NOT produce insights that cover only top performers and omit the bottom half of the page entirely.
+37. Top-Item Cross-Verification (No False Champions):
+   - Before naming any item as the "top revenue contributor", "best seller", "highest driver", or equivalent, scan ALL rows in the relevant category or table and confirm no other row has a higher revenue or quantity value.
+   - Only cite the item that actually has the highest value in the data for the stated metric.
+   - If the KPI card names a top category or top item, verify it against the actual row data; if there is a discrepancy, cite the row data and flag the KPI card as potentially stale or mismatched.
+   - Apply the same verification to outlet, session, and dimension-level "top" claims.
 `;
 
 const SYSTEM_INSTRUCTION_BASE = `You are an expert AI business intelligence analyst specializing in restaurant, hospitality, and sales analytics. You MUST strictly adhere to the AI Insight Generation Rules and respond with valid, parseable JSON ONLY without any markdown code fences, preamble, or conversational filler.\n${AI_INSIGHT_RULES}`;
@@ -809,7 +853,23 @@ STRICT CONSTRAINTS:
 3. Provide a MAXIMUM of 4 Key Findings, ranked by business impact. Each must state what happened, supporting number, and why it matters.
 4. Provide a MAXIMUM of 3 Recommendations, directly connected to findings and specific/actionable.
 5. Do NOT prefix findings or recommendations with "Finding 1:", "Finding 2:", "Recommendation 1:", "1.", "2.", or any bullet markers. Each item must be a clean, direct sentence.
-6. Adhere strictly to all 27 AI Insight Generation Rules.
+6. Adhere strictly to all 37 AI Insight Generation Rules.
+
+PRE-FLIGHT DATA-QUALITY CHECKLIST (mentally complete ALL steps before writing any output):
+Step A — TIME COLUMNS: Identify which columns represent individual periods (e.g., Mar, Apr, Aug) vs aggregate totals (e.g., Total, YTD, Cumulative). Never cite a Total column as "CM" or "current period".
+Step B — COMPARISON AVAILABILITY: Check whether LW, LM, LY, or prior-period rows/columns actually exist in the data. If a comparison column is absent or all-zero, remove ALL "vs Last Week / Last Month" language from your output.
+Step C — PARTIAL PERIOD DETECTION: Compare the latest period's revenue and covers to the 3-period trailing mean. If <60%, prepend a partial-period caveat to any finding that cites that period's performance.
+Step D — ARITHMETIC CONSISTENCY: Before writing the overview, mentally verify that stated component variances (e.g., Food −17%, Drinks −23%) are consistent with the stated aggregate direction (cannot be "flat"). If inconsistent, report only what the raw numbers support.
+Step E — DATE FILTER vs TABLE RANGE: If a selected date filter and a multi-period table are both present, state your narrative scope explicitly ("For [filter period]…" or "Across [table range]…") and do not mix scopes mid-narrative.
+Step F — DENOMINATOR CHECK: For every percentage cited, confirm which denominator was used (food subtotal vs net total vs category total) and ensure the context label matches.
+Step G — TOP-ITEM VERIFICATION: Before labelling any item or category as "top", scan all rows in the relevant group and confirm the named item has the highest value for the stated metric.
+Step H — BOTTOM-SELLER CHECK: Confirm at least one Key Finding and one Recommendation reference the lowest-performing items or bottom-sellers section.
+Step I — CATEGORY INTEGRITY: List distinct category labels present in the data (including any blank/unnamed ones). Flag blank labels. Verify the KPI card count matches the actual row count.
+Step J — OUTLET DRIVER VERIFICATION: If the data contains a "selected outlets" or filter list, ensure the outlet named as the "strongest driver" appears in that list and its values in the data are the highest among listed outlets.
+Step K — SESSION INFERENCE PROHIBITION: Do NOT infer or attribute session-level (Lunch / Dinner / Breakfast) breakdowns unless explicit session fields are present in the data. An outlet × day table does NOT imply session information.
+Step L — NUMBER FORMATTING: Express ALL numbers in numeric form (e.g., 46,667 — never "forty six thousand six hundred and sixty-seven"). Use £/$/€ prefix for monetary values, % suffix for percentages.
+Step M — TOP/BOTTOM OVERLAP: If a category appears in both Top Sellers and Bottom Sellers tables with identical rows, note: "[Category] has ≤5 items; top and bottom rows overlap — interpret with caution."
+Step N — CROSS-COMPONENT RECONCILIATION: If the same metric (e.g., Net Sales, Total Revenue) appears in more than one component with different values, flag the discrepancy rather than silently choosing one figure.
 `;
 
   logger.info(`Payload sent to AI Provider [${provider.toUpperCase()}]: ${contentText.length} characters`);
